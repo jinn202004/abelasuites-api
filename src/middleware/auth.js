@@ -17,7 +17,6 @@ function authenticate(req, res, next) {
     req.user = {
       id: payload.sub,
       email: payload.email,
-      username: payload.username,
       role: payload.role ?? "guest",
     };
     next();

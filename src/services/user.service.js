@@ -1,7 +1,6 @@
 const mongoose = require("mongoose");
 const User = require("../models/User");
 const { validatePasswordStrength } = require("../utils/passwordValidation");
-const { validateUsername } = require("../utils/usernameValidation");
 
 function normalizeEmail(email) {
   return String(email).toLowerCase().trim();
@@ -16,7 +15,6 @@ function toPublicUser(doc) {
   if (!doc) return null;
   return {
     id: doc._id,
-    username: doc.username,
     email: doc.email,
     firstName: doc.firstName ?? "",
     lastName: doc.lastName ?? "",
@@ -32,22 +30,18 @@ async function getById(userId) {
   return toPublicUser(user);
 }
 
-async function updateMe(userId, { username, email, firstName, lastName, currentPassword, newPassword }) {
-  const user = await User.findById(userId).select("+passwordHash");
+/**
+ * @param {object} fields - email, firstName, lastName, role, currentPassword, newPassword
+ * @param {{ isSelf: boolean, isAdmin: boolean }} ctx
+ */
+async function updateUser(targetUserId, fields, { isSelf, isAdmin }) {
+  const { email, firstName, lastName, role, currentPassword, newPassword } = fields;
+
+  const user = await User.findById(targetUserId).select("+passwordHash");
   if (!user) {
     const err = new Error("User not found");
     err.status = 404;
     throw err;
-  }
-
-  if (username !== undefined) {
-    const usernameError = validateUsername(username);
-    if (usernameError) {
-      const err = new Error(usernameError);
-      err.status = 400;
-      throw err;
-    }
-    user.username = String(username).trim().toLowerCase();
   }
 
   if (email !== undefined) {
@@ -62,18 +56,47 @@ async function updateMe(userId, { username, email, firstName, lastName, currentP
     user.lastName = trimName(lastName);
   }
 
-  if (newPassword !== undefined) {
-    if (!currentPassword) {
-      const err = new Error("currentPassword is required when setting newPassword");
+  if (role !== undefined) {
+    if (!isAdmin) {
+      const err = new Error("Only admins can change user roles");
+      err.status = 403;
+      throw err;
+    }
+    if (isSelf) {
+      const err = new Error(
+        "You cannot change your own role through this API; ask another admin or update the database"
+      );
       err.status = 400;
       throw err;
     }
-    const match = await user.comparePassword(currentPassword);
-    if (!match) {
-      const err = new Error("Current password is incorrect");
-      err.status = 401;
+    const roles = User.USER_ROLES;
+    if (!roles.includes(role)) {
+      const err = new Error("Invalid role");
+      err.status = 400;
       throw err;
     }
+    user.role = role;
+  }
+
+  if (newPassword !== undefined) {
+    if (isSelf) {
+      if (!currentPassword) {
+        const err = new Error("currentPassword is required when setting newPassword");
+        err.status = 400;
+        throw err;
+      }
+      const match = await user.comparePassword(currentPassword);
+      if (!match) {
+        const err = new Error("Current password is incorrect");
+        err.status = 401;
+        throw err;
+      }
+    } else if (!isAdmin) {
+      const err = new Error("Forbidden");
+      err.status = 403;
+      throw err;
+    }
+
     const pwdErr = validatePasswordStrength(newPassword);
     if (pwdErr) {
       const err = new Error(pwdErr);
@@ -88,4 +111,11 @@ async function updateMe(userId, { username, email, firstName, lastName, currentP
   return toPublicUser(fresh);
 }
 
-module.exports = { getById, updateMe };
+async function updateMe(userId, fields, actorIsAdmin) {
+  return updateUser(userId, fields, {
+    isSelf: true,
+    isAdmin: Boolean(actorIsAdmin),
+  });
+}
+
+module.exports = { getById, updateUser, updateMe };

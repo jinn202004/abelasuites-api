@@ -6,10 +6,6 @@ function normalizeEmail(email) {
   return String(email).toLowerCase().trim();
 }
 
-function normalizeUsername(username) {
-  return String(username).trim().toLowerCase();
-}
-
 function trimName(value) {
   if (value === undefined || value === null) return "";
   return String(value).trim();
@@ -18,7 +14,6 @@ function trimName(value) {
 function publicUser(user) {
   return {
     id: user._id,
-    username: user.username,
     email: user.email,
     firstName: user.firstName ?? "",
     lastName: user.lastName ?? "",
@@ -26,14 +21,12 @@ function publicUser(user) {
   };
 }
 
-async function register( email, password, phone, { firstName, lastName } = {}) {
+async function register(email, password, { firstName, lastName } = {}) {
   const user = await User.create({
-    // username: normalizeUsername(username),
     email: normalizeEmail(email),
     passwordHash: await User.hashPassword(password),
     firstName: trimName(firstName),
     lastName: trimName(lastName),
-    phone,
     role: "guest",
   });
   return publicUser(user);
@@ -63,7 +56,6 @@ async function login(email, password) {
     {
       sub: user._id.toString(),
       email: user.email,
-      username: user.username,
       role: user.role ?? "guest",
     },
     JWT_SECRET,

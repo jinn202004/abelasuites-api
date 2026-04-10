@@ -1,29 +1,25 @@
 const authService = require("../services/auth.service");
 const { validatePasswordStrength } = require("../utils/passwordValidation");
-const { validateUsername } = require("../utils/usernameValidation");
 
 function duplicateKeyMessage(err) {
   const key = err.keyPattern ? Object.keys(err.keyPattern)[0] : null;
-  if (key === "username") return "Username already taken";
   if (key === "email") return "Email already registered";
-  return "Username or email already registered";
+  return "Email already registered";
 }
 
 exports.register = async (req, res) => {
   try {
-    const { email, password, firstName, lastName, phone } = req.body;
+    const { email, password, firstName, lastName } = req.body;
     if (!email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Email, and password are required" });
+      return res.status(400).json({ error: "Email and password are required" });
     }
-    
+
     const passwordError = validatePasswordStrength(password);
     if (passwordError) {
       return res.status(400).json({ error: passwordError });
     }
 
-    const user = await authService.register( email, password, phone, {
+    const user = await authService.register(email, password, {
       firstName,
       lastName,
     });

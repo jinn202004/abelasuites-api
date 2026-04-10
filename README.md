@@ -36,7 +36,7 @@ All JSON routes are prefixed with **`/api`**.
    npm start      # production-style single run
    ```
 
-If you already have user documents without a `username` field, add one (unique) to each document or clear the collection before testing registration again.
+If you previously stored a `username` field on users, drop that field or migrate documents; new users are identified by **email** only.
 
 ---
 
@@ -59,14 +59,7 @@ Passwords (registration and `newPassword` on profile update) must:
 - Contain at least one **numeric** character (0–9)
 - Contain at least one **special** character (any character that is not a letter or digit)
 
-### Username rules
-
-Usernames (registration and optional change via `PATCH /api/users/me`) must:
-
-- Be **3–30** characters after trimming
-- Contain only **letters**, **numbers**, and **underscores** (`a–z`, `A–Z`, `0–9`, `_`)
-
-Stored usernames are **lowercase**. **Login** uses **email** + password; emails are compared case-insensitively (normalized like registration).
+**Login** and **email** fields on the user are compared case-insensitively (normalized like registration).
 
 ### Roles
 
@@ -113,7 +106,6 @@ Create a new account.
 
 | Field | Type | Required |
 |-------|------|----------|
-| `username` | string | yes (see [Username rules](#username-rules)) |
 | `email` | string | yes |
 | `password` | string | yes (see [Password rules](#password-rules)) |
 | `firstName` | string | no |
@@ -127,12 +119,10 @@ New accounts always get `role: "guest"` (see [Roles](#roles)).
 {
   "user": {
     "id": "<ObjectId>",
-    "username": "jane_doe",
     "email": "user@example.com",
     "firstName": "Jane",
     "lastName": "Doe",
-    "role": "guest",
-    "phone":"+639123456789"
+    "role": "guest"
   }
 }
 ```
@@ -141,8 +131,8 @@ New accounts always get `role: "guest"` (see [Roles](#roles)).
 
 | Status | When |
 |--------|------|
-| `400` | Missing fields, username invalid, or password does not meet [rules](#password-rules) |
-| `409` | Username or email already registered |
+| `400` | Missing fields or password does not meet [rules](#password-rules) |
+| `409` | Email already registered |
 
 ---
 
@@ -164,7 +154,6 @@ Obtain a JWT for subsequent requests. **Login uses email + password.**
   "token": "<jwt>",
   "user": {
     "id": "<ObjectId>",
-    "username": "jane_doe",
     "email": "user@example.com",
     "firstName": "Jane",
     "lastName": "Doe",
@@ -181,7 +170,7 @@ Obtain a JWT for subsequent requests. **Login uses email + password.**
 | `401` | Invalid credentials |
 | `500` | `JWT_SECRET` not configured |
 
-Use the `token` value as: `Authorization: Bearer <token>`. The token payload includes `role` for authorization in the client or future middleware.
+Use the `token` value as: `Authorization: Bearer <token>`. The token payload includes `email` and `role` for authorization in the client or future middleware.
 
 ---
 
@@ -199,7 +188,6 @@ Current user profile. **Requires authentication.**
 {
   "user": {
     "id": "<ObjectId>",
-    "username": "jane_doe",
     "email": "user@example.com",
     "firstName": "Jane",
     "lastName": "Doe",
@@ -222,7 +210,7 @@ Current user profile. **Requires authentication.**
 
 #### `PATCH /api/users/me`
 
-Update the authenticated user (profile fields, username, email, and/or password). **`role` is not updated here.** **Requires authentication.**
+Update the authenticated user (profile fields, email, and/or password). **`role` is not updated here** (except via explicit error if sent). **Requires authentication.**
 
 **Headers:** `Authorization: Bearer <token>`
 
@@ -232,7 +220,6 @@ Update the authenticated user (profile fields, username, email, and/or password)
 |-------|------|--------|
 | `firstName` | string | |
 | `lastName` | string | |
-| `username` | string | New username (see [Username rules](#username-rules)) |
 | `email` | string | New email (unique) |
 | `currentPassword` | string | Required if `newPassword` is sent |
 | `newPassword` | string | Must meet [Password rules](#password-rules) |
@@ -243,7 +230,6 @@ Update the authenticated user (profile fields, username, email, and/or password)
 {
   "user": {
     "id": "<ObjectId>",
-    "username": "jane_doe",
     "email": "user@example.com",
     "firstName": "Jane",
     "lastName": "Doe",
@@ -261,7 +247,47 @@ Update the authenticated user (profile fields, username, email, and/or password)
 | `400` | Validation (e.g. `newPassword` without `currentPassword`, password rules not met) |
 | `401` | Invalid token or wrong `currentPassword` |
 | `404` | User not found |
-| `409` | Username or email already in use |
+| `409` | Email already in use |
+
+---
+
+#### `PATCH /api/users/:id`
+
+Update a user by ID. **Requires authentication.**
+
+- **Same user** (`:id` matches the authenticated user): same body and rules as [`PATCH /api/users/me`](#patch-apiusersme) (including `currentPassword` when changing your own password). You cannot change your own `role` through this API.
+- **Admin** (`role` is `admin` in the JWT): may update **any** user. For **another** user, you may set `role` and may set `newPassword` **without** `currentPassword` (password reset). Admins changing **their own** password still must send `currentPassword`.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**URL params**
+
+| Param | Description |
+|-------|-------------|
+| `id` | MongoDB ObjectId of the user to update |
+
+**Body** (all optional; send only fields to change)
+
+| Field | Type | Notes |
+|-------|------|--------|
+| `firstName` | string | |
+| `lastName` | string | |
+| `email` | string | Unique |
+| `role` | string | **Admin only**, and **only when updating another user** (`:id` ≠ you). One of: `guest`, `cashier`, `frontdesk`, `admin`, `housekeeping` |
+| `currentPassword` | string | Required when **you** set `newPassword` (same account) |
+| `newPassword` | string | [Password rules](#password-rules). For **non-admin** targets, only the user themself can set it (with `currentPassword`). **Admin** may set another user’s password without `currentPassword`. |
+
+**Response `200`** — same `user` shape as `PATCH /me`.
+
+**Errors**
+
+| Status | When |
+|--------|------|
+| `400` | Invalid `id`, invalid `role`, or validation failed |
+| `401` | Missing/invalid token or wrong `currentPassword` (when required) |
+| `403` | Not allowed to update this user (not self and not admin) |
+| `404` | User not found |
+| `409` | Email conflict |
 
 ---
 
@@ -281,7 +307,6 @@ Public user profile by ID. No auth.
 {
   "user": {
     "id": "<ObjectId>",
-    "username": "jane_doe",
     "email": "user@example.com",
     "firstName": "Jane",
     "lastName": "Doe",
