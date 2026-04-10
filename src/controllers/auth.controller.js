@@ -11,7 +11,7 @@ function duplicateKeyMessage(err) {
 
 exports.register = async (req, res) => {
   try {
-    const { username, email, password, firstName, lastName } = req.body;
+    const { username, email, password, firstName, lastName, phone } = req.body;
     if (!username || !email || !password) {
       return res
         .status(400)
@@ -26,7 +26,7 @@ exports.register = async (req, res) => {
       return res.status(400).json({ error: passwordError });
     }
 
-    const user = await authService.register(username, email, password, {
+    const user = await authService.register(username, email, password, phone, {
       firstName,
       lastName,
     });

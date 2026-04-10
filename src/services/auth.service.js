@@ -26,13 +26,14 @@ function publicUser(user) {
   };
 }
 
-async function register(username, email, password, { firstName, lastName } = {}) {
+async function register(username, email, password, phone, { firstName, lastName } = {}) {
   const user = await User.create({
     username: normalizeUsername(username),
     email: normalizeEmail(email),
     passwordHash: await User.hashPassword(password),
     firstName: trimName(firstName),
     lastName: trimName(lastName),
+    phone,
     role: "guest",
   });
   return publicUser(user);
