@@ -9,7 +9,7 @@ function duplicateKeyMessage(err) {
 
 exports.register = async (req, res) => {
   try {
-    const { email, password, firstName, lastName } = req.body;
+    const { email, password, firstName, lastName, phone } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: "Email and password are required" });
     }
@@ -22,6 +22,7 @@ exports.register = async (req, res) => {
     const user = await authService.register(email, password, {
       firstName,
       lastName,
+      phone,
     });
     res.status(201).json({ user });
   } catch (err) {

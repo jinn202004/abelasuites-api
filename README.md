@@ -1,42 +1,80 @@
 # Joanah API
 
-REST API for the Joanah project. Built with **Express**, **MongoDB** (Mongoose), and **JWT** authentication.
+REST API for the Joanah project: **Express**, **MongoDB** (Mongoose), **JWT** auth, **CORS** enabled for all origins by default.
 
-**Base URL:** `http://localhost:5000` (or your host + `PORT` from `.env`)
+| | |
+|--|--|
+| **Base URL** | `http://localhost:<PORT>` (default port **5000**) |
+| **API prefix** | All routes below are under **`/api`** |
 
-All JSON routes are prefixed with **`/api`**.
+---
+
+## Contents
+
+- [Setup](#setup)
+- [Project layout](#project-layout)
+- [Conventions](#conventions)
+- [JWT](#jwt)
+- [Endpoints](#endpoints)
+- [Quick reference](#quick-reference)
 
 ---
 
 ## Setup
 
-1. **Requirements:** Node.js 18+, running MongoDB (local or Atlas).
+1. **Requirements:** Node.js **18+**, a running MongoDB instance (local or [Atlas](https://www.mongodb.com/cloud/atlas)).
 
 2. **Install**
 
    ```bash
+   cd backend
    npm install
    ```
 
 3. **Environment**
 
-   Copy `.env.example` to `.env` and set:
+   Copy `.env.example` to `.env` in the `backend` folder:
 
-   | Variable | Description |
-   |----------|-------------|
-   | `PORT` | HTTP port (default `5000`) |
-   | `MONGODB_URI` | MongoDB connection string |
-   | `JWT_SECRET` | Secret used to sign JWTs (required for login) |
-   | `JWT_EXPIRES_IN` | Token lifetime (e.g. `7d`, `24h`) |
+   | Variable | Required | Description |
+   |----------|----------|-------------|
+   | `MONGODB_URI` | yes | MongoDB connection string (e.g. `mongodb://127.0.0.1:27017/joanah`) |
+   | `JWT_SECRET` | yes for login | Long random string used to sign and verify JWTs |
+   | `PORT` | no | HTTP port (default **5000**) |
+   | `JWT_EXPIRES_IN` | no | Token lifetime (default **7d**). Examples: `24h`, `7d`, `3600` (seconds) |
+
+   On success, the server logs a line when MongoDB connects.
 
 4. **Run**
 
    ```bash
-   npm run dev    # auto-restart on file changes (Node --watch)
-   npm start      # production-style single run
+   npm run dev    # Node.js --watch: restarts on file changes
+   npm start      # Single run (no watch)
    ```
 
-If you previously stored a `username` field on users, drop that field or migrate documents; new users are identified by **email** only.
+**Legacy data:** If older user documents included a `username` field, remove it in MongoDB or migrate; users are keyed by **`email`** only.
+
+---
+
+## Project layout
+
+```
+backend/
+├── .env.example
+├── package.json
+├── README.md
+└── src/
+    ├── server.js           # Entry: connect DB, listen
+    ├── app.js              # Express app (middleware + /api routes)
+    ├── config/
+    │   ├── index.js        # env (PORT, MONGODB_URI, JWT_*)
+    │   └── database.js     # mongoose.connect
+    ├── controllers/        # auth, health, user
+    ├── middleware/         # auth (JWT), notFound, errorHandler
+    ├── models/             # User
+    ├── routes/             # health, auth, user (mounted under /api)
+    ├── services/           # auth, user
+    └── utils/              # passwordValidation, asyncHandler
+```
 
 ---
 
@@ -44,305 +82,181 @@ If you previously stored a `username` field on users, drop that field or migrate
 
 | Item | Detail |
 |------|--------|
-| **Content-Type** | `application/json` for bodies |
-| **Success** | JSON object; shape documented per endpoint |
+| **Content-Type** | `application/json` for request bodies |
+| **Success** | JSON objects as documented per route |
 | **Errors** | `{ "error": "message" }` unless noted |
-| **Auth** | Protected routes expect `Authorization: Bearer <access_token>` |
+| **Auth** | `Authorization: Bearer <access_token>` |
 
 ### Password rules
 
-Passwords (registration and `newPassword` on profile update) must:
+Applies to **registration** and to **`newPassword`** on profile updates:
 
-- Be at least **6** characters
-- Contain at least one **lowercase** letter (a–z)
-- Contain at least one **uppercase** letter (A–Z)
-- Contain at least one **numeric** character (0–9)
-- Contain at least one **special** character (any character that is not a letter or digit)
+- Minimum **6** characters  
+- At least one **lowercase** (a–z), one **uppercase** (A–Z), one **digit** (0–9), one **special** (any non–letter/digit)
 
-**Login** and **email** fields on the user are compared case-insensitively (normalized like registration).
+**Email** addresses are normalized (trimmed, lowercased) for login and storage.
 
 ### Roles
 
-Each user has a `role` string:
-
-| Value | Description |
+| Value | Typical use |
 |-------|-------------|
-| `guest` | Default for new sign-ups |
-| `cashier` | — |
-| `frontdesk` | — |
-| `admin` | — |
-| `housekeeping` | — |
+| `guest` | Default for `POST /api/auth/register` |
+| `cashier` | Staff |
+| `frontdesk` | Staff |
+| `admin` | Full user management (see below) |
+| `housekeeping` | Staff |
 
-Self-service registration always sets **`guest`**. Changing a user’s role (e.g. to staff) is done outside this API (e.g. in the database or a future admin endpoint). **`PATCH /api/users/me` does not change `role`.** The JWT includes `role` for use in your app (route guards, etc.).
+- **Self-service** registration always creates **`guest`**.  
+- **Changing roles:** Non-admins cannot set `role` via the API. **Admins** can set another user’s `role` with **`PATCH /api/users/:id`** when `:id` is **not** their own user id.  
+- **`PATCH /api/users/me`:** Sending `role` returns an error (non-admin: forbidden; admin on self: not allowed to change own role here).  
+- Re-issue JWTs after role changes in the database so tokens stay in sync (or log in again).
+
+---
+
+## JWT
+
+Issued by **`POST /api/auth/login`**. Verify with `JWT_SECRET`.
+
+| Claim | Meaning |
+|-------|---------|
+| `sub` | User id (MongoDB ObjectId as string) |
+| `email` | User email |
+| `role` | `guest` \| `cashier` \| `frontdesk` \| `admin` \| `housekeeping` |
+
+Older tokens missing `role` are treated as `guest` by the auth middleware.
 
 ---
 
 ## Endpoints
 
-### Health
+### `GET /api/health`
 
-#### `GET /api/health`
+Health check. **No auth.**
 
-Liveness check (no auth).
-
-**Response `200`**
+**200**
 
 ```json
-{
-  "ok": true,
-  "service": "joanah-api"
-}
+{ "ok": true, "service": "joanah-api" }
 ```
 
 ---
 
-### Auth
-
-#### `POST /api/auth/register`
-
-Create a new account.
+### `POST /api/auth/register`
 
 **Body**
 
-| Field | Type | Required |
-|-------|------|----------|
-| `email` | string | yes |
-| `password` | string | yes (see [Password rules](#password-rules)) |
-| `firstName` | string | no |
-| `lastName` | string | no |
+| Field | Required | Notes |
+|-------|----------|--------|
+| `email` | yes | Unique |
+| `password` | yes | [Password rules](#conventions) |
+| `firstName` | no | |
+| `lastName` | no | |
+| `phone` | no | Contact number (stored trimmed; empty string if omitted) |
 
-New accounts always get `role: "guest"` (see [Roles](#roles)).
+**201** — `{ "user": { "id", "email", "firstName", "lastName", "phone", "role" } }` with `role: "guest"`.
 
-**Response `201`**
-
-```json
-{
-  "user": {
-    "id": "<ObjectId>",
-    "email": "user@example.com",
-    "firstName": "Jane",
-    "lastName": "Doe",
-    "role": "guest"
-  }
-}
-```
-
-**Errors**
-
-| Status | When |
-|--------|------|
-| `400` | Missing fields or password does not meet [rules](#password-rules) |
-| `409` | Email already registered |
+**Errors:** `400` validation, `409` duplicate email.
 
 ---
 
-#### `POST /api/auth/login`
+### `POST /api/auth/login`
 
-Obtain a JWT for subsequent requests. **Login uses email + password.**
+**Body:** `{ "email", "password" }`
 
-**Body**
+**200** — `{ "token", "user" }` — same user shape as register (`id`, `email`, `firstName`, `lastName`, `phone`, `role`; no `createdAt` in auth responses).
 
-| Field | Type | Required |
-|-------|------|----------|
-| `email` | string | yes |
-| `password` | string | yes |
-
-**Response `200`**
-
-```json
-{
-  "token": "<jwt>",
-  "user": {
-    "id": "<ObjectId>",
-    "email": "user@example.com",
-    "firstName": "Jane",
-    "lastName": "Doe",
-    "role": "guest"
-  }
-}
-```
-
-**Errors**
-
-| Status | When |
-|--------|------|
-| `400` | Missing email or password |
-| `401` | Invalid credentials |
-| `500` | `JWT_SECRET` not configured |
-
-Use the `token` value as: `Authorization: Bearer <token>`. The token payload includes `email` and `role` for authorization in the client or future middleware.
+**Errors:** `400`, `401`, `500` (e.g. missing `JWT_SECRET`).
 
 ---
 
-### Users
+### `GET /api/users/me`
 
-#### `GET /api/users/me`
+**Auth:** Bearer token.
 
-Current user profile. **Requires authentication.**
+**200** — `{ "user": { "id", "email", "firstName", "lastName", "phone", "role", "createdAt", "updatedAt" } }`
 
-**Headers:** `Authorization: Bearer <token>`
-
-**Response `200`**
-
-```json
-{
-  "user": {
-    "id": "<ObjectId>",
-    "email": "user@example.com",
-    "firstName": "Jane",
-    "lastName": "Doe",
-    "role": "guest",
-    "createdAt": "<ISO date>",
-    "updatedAt": "<ISO date>"
-  }
-}
-```
-
-**Errors**
-
-| Status | When |
-|--------|------|
-| `401` | Missing/invalid/expired token |
-| `404` | User no longer exists |
-| `500` | `JWT_SECRET` not configured |
+**Errors:** `401`, `404`, `500`.
 
 ---
 
-#### `PATCH /api/users/me`
+### `PATCH /api/users/me`
 
-Update the authenticated user (profile fields, email, and/or password). **`role` is not updated here** (except via explicit error if sent). **Requires authentication.**
+Update the current user. **Auth:** Bearer token.
 
-**Headers:** `Authorization: Bearer <token>`
+**Body** (all optional)
 
-**Body** (all fields optional; send only what you want to change)
+| Field | Notes |
+|-------|--------|
+| `firstName`, `lastName`, `email` | |
+| `currentPassword` | Required if `newPassword` is sent |
+| `newPassword` | [Password rules](#conventions) |
+| `role` | Not applied; returns **403** (non-admin) or **400** (admin cannot change own role here) |
 
-| Field | Type | Notes |
-|-------|------|--------|
-| `firstName` | string | |
-| `lastName` | string | |
-| `email` | string | New email (unique) |
-| `currentPassword` | string | Required if `newPassword` is sent |
-| `newPassword` | string | Must meet [Password rules](#password-rules) |
+**200** — updated `user` (includes `createdAt` / `updatedAt`).
 
-**Response `200`**
-
-```json
-{
-  "user": {
-    "id": "<ObjectId>",
-    "email": "user@example.com",
-    "firstName": "Jane",
-    "lastName": "Doe",
-    "role": "guest",
-    "createdAt": "<ISO date>",
-    "updatedAt": "<ISO date>"
-  }
-}
-```
-
-**Errors**
-
-| Status | When |
-|--------|------|
-| `400` | Validation (e.g. `newPassword` without `currentPassword`, password rules not met) |
-| `401` | Invalid token or wrong `currentPassword` |
-| `404` | User not found |
-| `409` | Email already in use |
+**Errors:** `400`, `401`, `403`, `404`, `409` (duplicate email).
 
 ---
 
-#### `PATCH /api/users/:id`
+### `PATCH /api/users/:id`
 
-Update a user by ID. **Requires authentication.**
+Update a user by id. **Auth:** Bearer token.
 
-- **Same user** (`:id` matches the authenticated user): same body and rules as [`PATCH /api/users/me`](#patch-apiusersme) (including `currentPassword` when changing your own password). You cannot change your own `role` through this API.
-- **Admin** (`role` is `admin` in the JWT): may update **any** user. For **another** user, you may set `role` and may set `newPassword` **without** `currentPassword` (password reset). Admins changing **their own** password still must send `currentPassword`.
+| Caller | Allowed |
+|--------|---------|
+| Same user as `:id` | Same as `PATCH /me` (password change requires `currentPassword`) |
+| **`admin`** | Any user; for **another** user: may set `role`, may set `newPassword` **without** `currentPassword` (reset). Changing **own** password still requires `currentPassword`. |
+| Other roles | Only their own id (`403` otherwise) |
 
-**Headers:** `Authorization: Bearer <token>`
-
-**URL params**
-
-| Param | Description |
-|-------|-------------|
-| `id` | MongoDB ObjectId of the user to update |
-
-**Body** (all optional; send only fields to change)
-
-| Field | Type | Notes |
-|-------|------|--------|
-| `firstName` | string | |
-| `lastName` | string | |
-| `email` | string | Unique |
-| `role` | string | **Admin only**, and **only when updating another user** (`:id` ≠ you). One of: `guest`, `cashier`, `frontdesk`, `admin`, `housekeeping` |
-| `currentPassword` | string | Required when **you** set `newPassword` (same account) |
-| `newPassword` | string | [Password rules](#password-rules). For **non-admin** targets, only the user themself can set it (with `currentPassword`). **Admin** may set another user’s password without `currentPassword`. |
-
-**Response `200`** — same `user` shape as `PATCH /me`.
-
-**Errors**
-
-| Status | When |
-|--------|------|
-| `400` | Invalid `id`, invalid `role`, or validation failed |
-| `401` | Missing/invalid token or wrong `currentPassword` (when required) |
-| `403` | Not allowed to update this user (not self and not admin) |
-| `404` | User not found |
-| `409` | Email conflict |
+**Errors:** `400`, `401`, `403`, `404`, `409`.
 
 ---
 
-#### `GET /api/users/:id`
+### `GET /api/users/:id`
 
-Public user profile by ID. No auth.
+Public profile by ObjectId. **No auth.**
 
-**URL params**
-
-| Param | Description |
-|-------|-------------|
-| `id` | MongoDB ObjectId |
-
-**Response `200`**
-
-```json
-{
-  "user": {
-    "id": "<ObjectId>",
-    "email": "user@example.com",
-    "firstName": "Jane",
-    "lastName": "Doe",
-    "role": "guest",
-    "createdAt": "<ISO date>",
-    "updatedAt": "<ISO date>"
-  }
-}
-```
-
-**Errors**
-
-| Status | When |
-|--------|------|
-| `400` | `id` is not a valid ObjectId |
-| `404` | User not found |
+**Errors:** `400` (invalid id), `404`.
 
 ---
 
-## Example: login then fetch profile
+## Quick reference
+
+| Method | Path | Auth |
+|--------|------|------|
+| `GET` | `/api/health` | No |
+| `POST` | `/api/auth/register` | No |
+| `POST` | `/api/auth/login` | No |
+| `GET` | `/api/users/me` | Bearer |
+| `PATCH` | `/api/users/me` | Bearer |
+| `PATCH` | `/api/users/:id` | Bearer |
+| `GET` | `/api/users/:id` | No |
+
+---
+
+## Example
 
 ```http
-POST /api/auth/login
+POST /api/auth/login HTTP/1.1
+Host: localhost:5000
 Content-Type: application/json
 
 {"email":"user@example.com","password":"Yourpass1!"}
 ```
 
 ```http
-GET /api/users/me
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+GET /api/users/me HTTP/1.1
+Host: localhost:5000
+Authorization: Bearer <token>
 ```
 
 ---
 
 ## Other responses
 
-- **`404`** — Unknown route: `{ "error": "Not found" }`
-- **`500`** — Unhandled server error: `{ "error": "Internal server error" }` (or a specific message when thrown intentionally)
+| Status | Meaning |
+|--------|---------|
+| **404** | Unknown path: `{ "error": "Not found" }` |
+| **500** | Unhandled error: `{ "error": "Internal server error" }` or a specific message |
+
+Use a strong **`JWT_SECRET`** in production and keep `.env` out of version control.

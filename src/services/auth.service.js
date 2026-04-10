@@ -11,22 +11,29 @@ function trimName(value) {
   return String(value).trim();
 }
 
+function trimPhone(value) {
+  if (value === undefined || value === null) return "";
+  return String(value).trim();
+}
+
 function publicUser(user) {
   return {
     id: user._id,
     email: user.email,
     firstName: user.firstName ?? "",
     lastName: user.lastName ?? "",
+    phone: user.phone ?? "",
     role: user.role ?? "guest",
   };
 }
 
-async function register(email, password, { firstName, lastName } = {}) {
+async function register(email, password, { firstName, lastName, phone } = {}) {
   const user = await User.create({
     email: normalizeEmail(email),
     passwordHash: await User.hashPassword(password),
     firstName: trimName(firstName),
     lastName: trimName(lastName),
+    phone: trimPhone(phone),
     role: "guest",
   });
   return publicUser(user);

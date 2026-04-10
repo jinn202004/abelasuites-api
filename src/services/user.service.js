@@ -18,6 +18,7 @@ function toPublicUser(doc) {
     email: doc.email,
     firstName: doc.firstName ?? "",
     lastName: doc.lastName ?? "",
+    phone: doc.phone ?? "",
     role: doc.role ?? "guest",
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
@@ -31,11 +32,12 @@ async function getById(userId) {
 }
 
 /**
- * @param {object} fields - email, firstName, lastName, role, currentPassword, newPassword
+ * @param {object} fields - email, firstName, lastName, phone, role, currentPassword, newPassword
  * @param {{ isSelf: boolean, isAdmin: boolean }} ctx
  */
 async function updateUser(targetUserId, fields, { isSelf, isAdmin }) {
-  const { email, firstName, lastName, role, currentPassword, newPassword } = fields;
+  const { email, firstName, lastName, phone, role, currentPassword, newPassword } =
+    fields;
 
   const user = await User.findById(targetUserId).select("+passwordHash");
   if (!user) {
@@ -54,6 +56,10 @@ async function updateUser(targetUserId, fields, { isSelf, isAdmin }) {
 
   if (lastName !== undefined) {
     user.lastName = trimName(lastName);
+  }
+
+  if (phone !== undefined) {
+    user.phone = trimName(phone);
   }
 
   if (role !== undefined) {
