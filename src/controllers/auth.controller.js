@@ -11,22 +11,19 @@ function duplicateKeyMessage(err) {
 
 exports.register = async (req, res) => {
   try {
-    const { username, email, password, firstName, lastName, phone } = req.body;
-    if (!username || !email || !password) {
+    const { email, password, firstName, lastName, phone } = req.body;
+    if (!email || !password) {
       return res
         .status(400)
-        .json({ error: "Username, email, and password are required" });
+        .json({ error: "Email, and password are required" });
     }
-    const usernameError = validateUsername(username);
-    if (usernameError) {
-      return res.status(400).json({ error: usernameError });
-    }
+    
     const passwordError = validatePasswordStrength(password);
     if (passwordError) {
       return res.status(400).json({ error: passwordError });
     }
 
-    const user = await authService.register(username, email, password, phone, {
+    const user = await authService.register( email, password, phone, {
       firstName,
       lastName,
     });
@@ -41,12 +38,12 @@ exports.register = async (req, res) => {
 
 exports.login = async (req, res) => {
   try {
-    const { username, password } = req.body;
-    if (!username || !password) {
-      return res.status(400).json({ error: "Username and password are required" });
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required" });
     }
 
-    const result = await authService.login(username, password);
+    const result = await authService.login(email, password);
     res.json(result);
   } catch (err) {
     if (err.status === 401) {

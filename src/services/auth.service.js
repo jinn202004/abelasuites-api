@@ -26,9 +26,9 @@ function publicUser(user) {
   };
 }
 
-async function register(username, email, password, phone, { firstName, lastName } = {}) {
+async function register( email, password, phone, { firstName, lastName } = {}) {
   const user = await User.create({
-    username: normalizeUsername(username),
+    // username: normalizeUsername(username),
     email: normalizeEmail(email),
     passwordHash: await User.hashPassword(password),
     firstName: trimName(firstName),
@@ -39,22 +39,22 @@ async function register(username, email, password, phone, { firstName, lastName 
   return publicUser(user);
 }
 
-async function login(username, password) {
+async function login(email, password) {
   if (!JWT_SECRET) {
     throw Object.assign(new Error("JWT_SECRET is not configured"), { status: 500 });
   }
 
-  const normalized = normalizeUsername(username);
-  const user = await User.findOne({ username: normalized }).select("+passwordHash");
+  const normalized = normalizeEmail(email);
+  const user = await User.findOne({ email: normalized }).select("+passwordHash");
   if (!user) {
-    const err = new Error("Invalid username or password");
+    const err = new Error("Invalid email or password");
     err.status = 401;
     throw err;
   }
 
   const match = await user.comparePassword(password);
   if (!match) {
-    const err = new Error("Invalid username or password");
+    const err = new Error("Invalid email or password");
     err.status = 401;
     throw err;
   }
@@ -64,7 +64,7 @@ async function login(username, password) {
       sub: user._id.toString(),
       email: user.email,
       username: user.username,
-      role: user.role,
+      role: user.role ?? "guest",
     },
     JWT_SECRET,
     { expiresIn: JWT_EXPIRES_IN }

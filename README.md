@@ -66,7 +66,7 @@ Usernames (registration and optional change via `PATCH /api/users/me`) must:
 - Be **3–30** characters after trimming
 - Contain only **letters**, **numbers**, and **underscores** (`a–z`, `A–Z`, `0–9`, `_`)
 
-Stored usernames are **lowercase**; login matches case-insensitively.
+Stored usernames are **lowercase**. **Login** uses **email** + password; emails are compared case-insensitively (normalized like registration).
 
 ### Roles
 
@@ -131,7 +131,8 @@ New accounts always get `role: "guest"` (see [Roles](#roles)).
     "email": "user@example.com",
     "firstName": "Jane",
     "lastName": "Doe",
-    "role": "guest"
+    "role": "guest",
+    "phone":"+639123456789"
   }
 }
 ```
@@ -147,13 +148,13 @@ New accounts always get `role: "guest"` (see [Roles](#roles)).
 
 #### `POST /api/auth/login`
 
-Obtain a JWT for subsequent requests. **Login uses username + password** (not email).
+Obtain a JWT for subsequent requests. **Login uses email + password.**
 
 **Body**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `username` | string | yes |
+| `email` | string | yes |
 | `password` | string | yes |
 
 **Response `200`**
@@ -176,7 +177,7 @@ Obtain a JWT for subsequent requests. **Login uses username + password** (not em
 
 | Status | When |
 |--------|------|
-| `400` | Missing username or password |
+| `400` | Missing email or password |
 | `401` | Invalid credentials |
 | `500` | `JWT_SECRET` not configured |
 
@@ -306,7 +307,7 @@ Public user profile by ID. No auth.
 POST /api/auth/login
 Content-Type: application/json
 
-{"username":"jane_doe","password":"Yourpass1!"}
+{"email":"user@example.com","password":"Yourpass1!"}
 ```
 
 ```http
