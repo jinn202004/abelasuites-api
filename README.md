@@ -225,7 +225,9 @@ Public profile by ObjectId. **No auth.**
 
 ### Room endpoints
 
-All `/api/rooms` routes require **Bearer auth** and **admin role**.
+**Read:** `GET /api/rooms` and `GET /api/rooms/:id` are **public** (no auth) so guests can browse the catalog.
+
+**Write:** `POST`, `PATCH`, and `DELETE` require **Bearer auth** and **admin role**.
 
 **Room object**
 
@@ -247,13 +249,13 @@ All `/api/rooms` routes require **Bearer auth** and **admin role**.
 
 #### `GET /api/rooms`
 
-Returns all rooms sorted by `roomNumber`.
+Returns all rooms sorted by `roomNumber`. **No auth.**
 
 **200** — `{ "rooms": [Room, ...] }`
 
 #### `GET /api/rooms/:id`
 
-Get a single room by id.
+Get a single room by id. **No auth.**
 
 **200** — `{ "room": Room }`
 
@@ -261,7 +263,7 @@ Get a single room by id.
 
 #### `POST /api/rooms`
 
-Create a room.
+Create a room. **Auth:** Bearer + admin.
 
 **Body**
 
@@ -487,8 +489,8 @@ Delete a booking if accessible.
 | `PATCH` | `/api/users/me` | Bearer |
 | `PATCH` | `/api/users/:id` | Bearer |
 | `GET` | `/api/users/:id` | No |
-| `GET` | `/api/rooms` | Bearer + admin |
-| `GET` | `/api/rooms/:id` | Bearer + admin |
+| `GET` | `/api/rooms` | No |
+| `GET` | `/api/rooms/:id` | No |
 | `POST` | `/api/rooms` | Bearer + admin |
 | `PATCH` | `/api/rooms/:id` | Bearer + admin |
 | `DELETE` | `/api/rooms/:id` | Bearer + admin |
