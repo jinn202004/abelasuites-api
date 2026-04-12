@@ -16,6 +16,9 @@ REST API for the Joanah project: **Express**, **MongoDB** (Mongoose), **JWT** au
 - [Conventions](#conventions)
 - [JWT](#jwt)
 - [Endpoints](#endpoints)
+- [Room endpoints](#room-endpoints)
+- [Event venue endpoints](#event-venue-endpoints)
+- [Booking endpoints](#booking-endpoints)
 - [Quick reference](#quick-reference)
 
 ---
@@ -220,6 +223,259 @@ Public profile by ObjectId. **No auth.**
 
 ---
 
+### Room endpoints
+
+All `/api/rooms` routes require **Bearer auth** and **admin role**.
+
+**Room object**
+
+```json
+{
+  "id": "<ObjectId>",
+  "title": "Deluxe King Room",
+  "roomNumber": "101",
+  "package": "Overnight",
+  "image": "https://...",
+  "price": 3500,
+  "guests": 2,
+  "description": "Spacious room with balcony",
+  "features": ["WiFi", "Aircon", "TV"],
+  "createdAt": "<ISO date>",
+  "updatedAt": "<ISO date>"
+}
+```
+
+#### `GET /api/rooms`
+
+Returns all rooms sorted by `roomNumber`.
+
+**200** — `{ "rooms": [Room, ...] }`
+
+#### `GET /api/rooms/:id`
+
+Get a single room by id.
+
+**200** — `{ "room": Room }`
+
+**Errors:** `400` invalid id, `404` not found.
+
+#### `POST /api/rooms`
+
+Create a room.
+
+**Body**
+
+| Field | Required | Notes |
+|-------|----------|--------|
+| `title` | yes | non-empty string |
+| `roomNumber` | yes | unique string |
+| `price` | yes | number (accepts numeric strings; currency symbols, commas, spaces are stripped) |
+| `guests` | yes | positive integer |
+| `package` | no | string |
+| `image` | no | string URL/path |
+| `description` | no | string |
+| `features` | no | array of strings |
+
+**201** — `{ "room": Room }`
+
+**Errors:** `400` validation, `409` duplicate `roomNumber`.
+
+#### `PATCH /api/rooms/:id`
+
+Partial update for any room fields in the create payload.
+
+**200** — `{ "room": Room }`
+
+**Errors:** `400` invalid id/validation, `404` not found, `409` duplicate `roomNumber`.
+
+#### `DELETE /api/rooms/:id`
+
+Delete a room.
+
+**200** — `{ "room": Room, "deleted": true }`
+
+**Errors:** `400` invalid id, `404` not found.
+
+---
+
+### Event venue endpoints
+
+All `/api/event-venues` routes require **Bearer auth** and **admin role**.
+
+**Event venue object**
+
+```json
+{
+  "id": "<ObjectId>",
+  "eventNum": "EV-001",
+  "name": "Grand Ballroom",
+  "package": "Wedding",
+  "type": "Event",
+  "limit": "100-150 pax",
+  "capacity": 150,
+  "price": 50000,
+  "location": "2nd Floor",
+  "description": "Spacious indoor hall",
+  "features": ["Sound system", "Lighting"],
+  "amenities": ["Sound system", "Lighting"],
+  "housekeeping": ["Post-event cleanup"],
+  "image": "https://...",
+  "createdAt": "<ISO date>",
+  "updatedAt": "<ISO date>"
+}
+```
+
+#### `GET /api/event-venues`
+
+Returns all venues sorted by `eventNum`.
+
+**200** — `{ "eventVenues": [EventVenue, ...] }`
+
+#### `GET /api/event-venues/:id`
+
+Get one venue by id.
+
+**200** — `{ "eventVenue": EventVenue }`
+
+**Errors:** `400` invalid id, `404` not found.
+
+#### `POST /api/event-venues`
+
+Create a venue.
+
+**Body** (required fields on create)
+
+| Field | Required | Notes |
+|-------|----------|--------|
+| `eventNum` | yes | unique string |
+| `name` | yes | |
+| `package` | yes | |
+| `limit` | yes | display text e.g. `20-30 guests` |
+| `price` | yes | number (numeric strings accepted; currency symbols/commas/spaces stripped) |
+| `location` | yes | |
+| `description` | yes | |
+| `image` | yes | URL/path |
+| `features` or `amenities` | yes | at least one entry |
+| `type` | no | defaults to `Event` |
+| `capacity` | no | positive integer |
+| `housekeeping` | no | array of strings |
+
+**201** — `{ "eventVenue": EventVenue }`
+
+**Errors:** `400` validation (may include `missing` list), `409` duplicate `eventNum`.
+
+#### `PATCH /api/event-venues/:id`
+
+Partial update for any venue fields above.
+
+**200** — `{ "eventVenue": EventVenue }`
+
+**Errors:** `400` invalid id/validation, `404` not found, `409` duplicate `eventNum`.
+
+#### `DELETE /api/event-venues/:id`
+
+Delete a venue.
+
+**200** — `{ "eventVenue": EventVenue, "deleted": true }`
+
+**Errors:** `400` invalid id, `404` not found.
+
+---
+
+### Booking endpoints
+
+All `/api/bookings` routes require **Bearer auth**.
+
+- **Staff roles** (`admin`, `cashier`, `frontdesk`, `housekeeping`) can access all bookings.
+- **Guests** can only access their own bookings (`userId === req.user.id`).
+
+**Booking object**
+
+```json
+{
+  "id": "<ObjectId>",
+  "type": "room",
+  "userId": "<ObjectId>",
+  "customerName": "Jane Doe",
+  "email": "jane@example.com",
+  "contactNumber": "09123456789",
+  "status": "pending",
+  "roomId": "room_101",
+  "checkIn": "2026-05-10",
+  "checkOut": "2026-05-11",
+  "eventVenueId": "",
+  "eventDate": "",
+  "createdAt": "<ISO date>",
+  "updatedAt": "<ISO date>"
+}
+```
+
+Supported `status` values: `pending`, `confirmed`, `declined`, `cancelled`, `completed`.
+
+#### `GET /api/bookings`
+
+List bookings visible to the authenticated user.
+
+**200** — `{ "bookings": [Booking, ...] }`
+
+#### `GET /api/bookings/:id`
+
+Get one booking if accessible to the authenticated user.
+
+**200** — `{ "booking": Booking }`
+
+**Errors:** `400` invalid id, `403` forbidden, `404` not found.
+
+#### `POST /api/bookings`
+
+Create a booking.
+
+**Body** (common required)
+
+| Field | Required | Notes |
+|-------|----------|--------|
+| `type` | yes | `room` or `event` |
+| `customerName` | yes | |
+| `email` | yes | |
+
+**Additional required by type**
+
+| Type | Required fields |
+|------|-----------------|
+| `room` | `roomId`, `checkIn`, `checkOut` |
+| `event` | `eventVenueId`, `eventDate`, `eventTitle` |
+
+**201** — `{ "booking": Booking }`
+
+Notes:
+- Non-staff users are forced to `status: "pending"` on create.
+- Optional booking metadata fields (payment, IDs, requests, etc.) are accepted and stored if provided.
+
+**Errors:** `400` validation.
+
+#### `PATCH /api/bookings/:id`
+
+Update a booking if accessible.
+
+Rules:
+- `type` cannot be changed after creation.
+- `status` must be valid.
+- Guests may only change `status` to `cancelled`.
+
+**200** — `{ "booking": Booking }`
+
+**Errors:** `400` validation, `403` forbidden, `404` not found.
+
+#### `DELETE /api/bookings/:id`
+
+Delete a booking if accessible.
+
+**200** — `{ "booking": Booking, "deleted": true }`
+
+**Errors:** `400` invalid id, `403` forbidden, `404` not found.
+
+---
+
 ## Quick reference
 
 | Method | Path | Auth |
@@ -231,6 +487,21 @@ Public profile by ObjectId. **No auth.**
 | `PATCH` | `/api/users/me` | Bearer |
 | `PATCH` | `/api/users/:id` | Bearer |
 | `GET` | `/api/users/:id` | No |
+| `GET` | `/api/rooms` | Bearer + admin |
+| `GET` | `/api/rooms/:id` | Bearer + admin |
+| `POST` | `/api/rooms` | Bearer + admin |
+| `PATCH` | `/api/rooms/:id` | Bearer + admin |
+| `DELETE` | `/api/rooms/:id` | Bearer + admin |
+| `GET` | `/api/event-venues` | Bearer + admin |
+| `GET` | `/api/event-venues/:id` | Bearer + admin |
+| `POST` | `/api/event-venues` | Bearer + admin |
+| `PATCH` | `/api/event-venues/:id` | Bearer + admin |
+| `DELETE` | `/api/event-venues/:id` | Bearer + admin |
+| `GET` | `/api/bookings` | Bearer |
+| `GET` | `/api/bookings/:id` | Bearer |
+| `POST` | `/api/bookings` | Bearer |
+| `PATCH` | `/api/bookings/:id` | Bearer |
+| `DELETE` | `/api/bookings/:id` | Bearer |
 
 ---
 
