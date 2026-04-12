@@ -52,3 +52,25 @@ exports.login = async (req, res) => {
     throw err;
   }
 };
+
+/**
+ * POST /auth/logout — requires `Authorization: Bearer <access_token>`.
+ * Blacklists the token until its original expiry so it cannot be reused.
+ */
+exports.logout = async (req, res) => {
+  try {
+    const header = req.headers.authorization;
+    const token = header && header.startsWith("Bearer ") ? header.slice(7) : "";
+    if (!token) {
+      return res.status(400).json({ error: "No bearer token to revoke" });
+    }
+
+    await authService.revokeToken(token, req.user.id);
+    res.status(200).json({ message: "Logged out successfully", revoked: true });
+  } catch (err) {
+    if (err.status === 400 || err.status === 403) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    throw err;
+  }
+};
