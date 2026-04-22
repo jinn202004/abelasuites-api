@@ -1,5 +1,8 @@
 const mongoose = require("mongoose");
 
+/** Same lifecycle labels as rooms for venue turnover / cleaning. */
+const EVENT_VENUE_STATUSES = ["available", "occupied", "needs_cleaning", "cleaning_in_progress", "ready"];
+
 /**
  * Matches legacy json-server `eventVenues` (name, capacity, price, location, amenities…)
  * and admin UI (eventNum, package, type, limit, features, housekeeping…).
@@ -66,10 +69,18 @@ const eventVenueSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    status: {
+      type: String,
+      enum: EVENT_VENUE_STATUSES,
+      default: "available",
+      index: true,
+    },
   },
   { timestamps: true }
 );
 
 const EventVenue = mongoose.model("EventVenue", eventVenueSchema);
+
+EventVenue.EVENT_VENUE_STATUSES = EVENT_VENUE_STATUSES;
 
 module.exports = EventVenue;

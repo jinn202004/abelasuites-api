@@ -14,6 +14,7 @@ function toPublicRoom(doc) {
     guests: o.guests,
     description: o.description ?? "",
     features: Array.isArray(o.features) ? o.features : [],
+    status: o.status ?? "available",
     createdAt: o.createdAt,
     updatedAt: o.updatedAt,
   };
@@ -144,6 +145,15 @@ async function update(roomId, body) {
   if (guests !== undefined) room.guests = parseGuests(guests);
   if (description !== undefined) room.description = String(description).trim();
   if (features !== undefined) room.features = normalizeFeatures(features);
+  if (body.status !== undefined) {
+    const st = String(body.status).trim();
+    if (!Room.ROOM_STATUSES.includes(st)) {
+      const err = new Error(`status must be one of: ${Room.ROOM_STATUSES.join(", ")}`);
+      err.status = 400;
+      throw err;
+    }
+    room.status = st;
+  }
 
   try {
     await room.save();

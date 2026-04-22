@@ -7,7 +7,8 @@ const errorHandler = require("./middleware/errorHandler");
 function createApp() {
   const app = express();
   app.use(cors());
-  app.use(express.json());
+  // Guest bookings send base64 ID images in JSON; default 100kb is too small.
+  app.use(express.json({ limit: "15mb" }));
   app.use("/api", apiRoutes);
   app.use(notFound);
   app.use(errorHandler);

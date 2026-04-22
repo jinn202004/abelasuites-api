@@ -1,6 +1,6 @@
-# Joanah API
+# Abela / Joanah API
 
-REST API for the Joanah project: **Express**, **MongoDB** (Mongoose), **JWT** auth, **CORS** enabled for all origins by default.
+REST API for the Abela project: **Express**, **MongoDB** (Mongoose), **JWT** auth, **CORS** enabled for all origins by default.
 
 | | |
 |--|--|
@@ -13,12 +13,17 @@ REST API for the Joanah project: **Express**, **MongoDB** (Mongoose), **JWT** au
 
 - [Setup](#setup)
 - [Project layout](#project-layout)
+- [Middleware](#middleware)
 - [Conventions](#conventions)
 - [JWT](#jwt)
 - [Endpoints](#endpoints)
+- [Auth: logout](#post-apiauthlogout)
+- [Staff management](#staff-management-admin-only)
 - [Room endpoints](#room-endpoints)
 - [Event venue endpoints](#event-venue-endpoints)
 - [Booking endpoints](#booking-endpoints)
+- [Frontdesk booking approval](#frontdesk-booking-approval)
+- [Housekeeping (cleaning tasks)](#housekeeping-cleaning-tasks)
 - [Quick reference](#quick-reference)
 
 ---
@@ -29,14 +34,16 @@ REST API for the Joanah project: **Express**, **MongoDB** (Mongoose), **JWT** au
 
 2. **Install**
 
+   From the backend package folder:
+
    ```bash
-   cd backend
+   cd be/abela-be
    npm install
    ```
 
 3. **Environment**
 
-   Copy `.env.example` to `.env` in the `backend` folder:
+   Copy `.env.example` to `.env` in the same folder (`be/abela-be`):
 
    | Variable | Required | Description |
    |----------|----------|-------------|
@@ -47,11 +54,23 @@ REST API for the Joanah project: **Express**, **MongoDB** (Mongoose), **JWT** au
 
    On success, the server logs a line when MongoDB connects.
 
-4. **Run**
+4. **Database**
+
+   - Start MongoDB locally, or use Atlas and paste the SRV URI into `MONGODB_URI`.
+   - Collections (`users`, `staff`, `rooms`, `bookings`, `housekeepingtasks`, etc.) are created automatically when first used.
+
+5. **Run**
 
    ```bash
    npm run dev    # Node.js --watch: restarts on file changes
    npm start      # Single run (no watch)
+   ```
+
+6. **Legacy bookings without a Guest link (optional)**  
+   If you upgraded from a version where `bookings.guestId` stored a **string** (ID number) instead of a `Guest` document id, run once:
+
+   ```bash
+   npm run migrate-booking-guests
    ```
 
 **Legacy data:** If older user documents included a `username` field, remove it in MongoDB or migrate; users are keyed by **`email`** only.
@@ -61,7 +80,7 @@ REST API for the Joanah project: **Express**, **MongoDB** (Mongoose), **JWT** au
 ## Project layout
 
 ```
-backend/
+be/abela-be/
 ├── .env.example
 ├── package.json
 ├── README.md
@@ -71,13 +90,28 @@ backend/
     ├── config/
     │   ├── index.js        # env (PORT, MONGODB_URI, JWT_*)
     │   └── database.js     # mongoose.connect
-    ├── controllers/        # auth, health, user
-    ├── middleware/         # auth (JWT), notFound, errorHandler
-    ├── models/             # User
-    ├── routes/             # health, auth, user (mounted under /api)
-    ├── services/           # auth, user
+    ├── controllers/        # auth, health, user, room, staff, bookingApproval, housekeeping, …
+    ├── middleware/         # auth, authMiddleware, adminMiddleware, roleMiddleware, notFound, errorHandler
+    ├── models/             # User, Guest, Staff, Room, Booking, …
+    ├── routes/             # mounted under /api
+    ├── services/           # business logic (e.g. guest, booking, bookingApproval, housekeeping)
     └── utils/              # passwordValidation, asyncHandler
 ```
+
+---
+
+## Middleware
+
+| Export | File | Role |
+|--------|------|------|
+| `authenticate` | `middleware/auth.js` | Verifies `Authorization: Bearer <JWT>`, checks revocation list, sets `req.user` |
+| `authMiddleware` | `middleware/authMiddleware.js` | Same behavior as `authenticate` (alias for route modules) |
+| `requireAdmin` | `middleware/requireAdmin.js` | After auth: **403** unless `req.user.role === "admin"` |
+| `adminMiddleware` | `middleware/adminMiddleware.js` | Same as `requireAdmin` (alias) |
+| `requireFrontdeskOrAdmin` | `middleware/roleMiddleware.js` | After auth: **403** unless role is `frontdesk` or `admin` |
+| `requireHousekeepingOrAdmin` | `middleware/roleMiddleware.js` | After auth: **403** unless role is `housekeeping` or `admin` |
+
+**Staff routes** use `authMiddleware` then `adminMiddleware` so only admins can manage the `staff` collection.
 
 ---
 
@@ -169,6 +203,86 @@ Health check. **No auth.**
 **200** — `{ "token", "user" }` — same user shape as register (`id`, `email`, `firstName`, `lastName`, `phone`, `role`; no `createdAt` in auth responses).
 
 **Errors:** `400`, `401`, `500` (e.g. missing `JWT_SECRET`).
+
+---
+
+### `POST /api/auth/logout`
+
+Ends the current session by **blacklisting the JWT** until its natural expiry (stored in `RevokedToken`). **Requires authentication:** send the same bearer token you are revoking.
+
+**Headers:** `Authorization: Bearer <access_token>`
+
+**200** — `{ "message": "Logged out successfully", "revoked": true }`
+
+**Errors:** `400` (no bearer token), `401` (invalid/expired/revoked token), `403` (token subject mismatch).
+
+---
+
+### Staff management (admin only)
+
+All `/api/staff` routes require **`Authorization: Bearer <token>`** and **`role: "admin"`** in that token.
+
+**Staff object**
+
+```json
+{
+  "id": "<ObjectId>",
+  "name": "Jane Doe",
+  "email": "jane@example.com",
+  "role": "Front Desk",
+  "department": "Front Office",
+  "contact": "09123456789",
+  "status": "Active",
+  "createdAt": "<ISO date>",
+  "updatedAt": "<ISO date>"
+}
+```
+
+Allowed `role` values: `Admin`, `Front Desk`, `Housekeeping`, `Cashier`.  
+Allowed `status` values: `Active`, `On Leave`, `Inactive`.
+
+#### `GET /api/staff`
+
+List all staff (newest first).
+
+**200** — `{ "staff": [Staff, ...] }`
+
+**Errors:** `401`, `403`.
+
+#### `POST /api/staff`
+
+Create a staff record.
+
+**Body**
+
+| Field | Required | Notes |
+|-------|----------|--------|
+| `name` | yes | Non-empty string |
+| `email` | yes | Unique |
+| `role` | yes | One of the allowed values |
+| `department` | yes | e.g. `Operations` |
+| `contact` | no | Phone / extension (stored trimmed) |
+| `status` | no | Defaults to `Active` |
+
+**201** — `{ "staff": Staff }`
+
+**Errors:** `400` validation, `401`, `403`, `409` duplicate email.
+
+#### `PUT /api/staff/:id`
+
+Update a staff member (partial body supported: send only fields to change).
+
+**200** — `{ "staff": Staff }`
+
+**Errors:** `400` invalid id / validation, `401`, `403`, `404`, `409` duplicate email.
+
+#### `DELETE /api/staff/:id`
+
+Delete a staff record.
+
+**200** — `{ "staff": Staff, "deleted": true }`
+
+**Errors:** `400` invalid id, `401`, `403`, `404`.
 
 ---
 
@@ -391,13 +505,32 @@ All `/api/bookings` routes require **Bearer auth**.
 - **Staff roles** (`admin`, `cashier`, `frontdesk`, `housekeeping`) can access all bookings.
 - **Guests** can only access their own bookings (`userId === req.user.id`).
 
-**Booking object**
+#### Bookings ↔ guests (MongoDB)
+
+- Collection **`guests`** holds a **guest profile** (name, email, phone, valid ID fields, optional link to `users` via `userId`).
+- Each **booking** document has **`guestId`** → `ObjectId` reference **`Guest`** (many bookings can point to the same guest when they share an account or email).
+- On **`POST /api/bookings`**, the API **upserts** a `Guest` from the request body and sets **`booking.guestId`**. Denormalized `customerName` / `email` on the booking remain for compatibility and search.
+- **`GET /api/bookings`** and **`GET /api/bookings/:id`** **populate** `guestId` and return a nested **`guest`** object (staff see ID photo fields where applicable).
+
+**Booking object (abbrev.)**
 
 ```json
 {
   "id": "<ObjectId>",
   "type": "room",
   "userId": "<ObjectId>",
+  "guestId": "<ObjectId>",
+  "guest": {
+    "id": "<ObjectId>",
+    "userId": "<ObjectId or null>",
+    "displayName": "Jane Doe",
+    "email": "jane@example.com",
+    "phone": "09123456789",
+    "address": "",
+    "validIdNumber": "P1234567",
+    "validIdPhotoName": "",
+    "validIdPhotoData": ""
+  },
   "customerName": "Jane Doe",
   "email": "jane@example.com",
   "contactNumber": "09123456789",
@@ -407,16 +540,24 @@ All `/api/bookings` routes require **Bearer auth**.
   "checkOut": "2026-05-11",
   "eventVenueId": "",
   "eventDate": "",
+  "approvedBy": null,
+  "approvedAt": null,
   "createdAt": "<ISO date>",
   "updatedAt": "<ISO date>"
 }
 ```
 
-Supported `status` values: `pending`, `confirmed`, `declined`, `cancelled`, `completed`.
+`validIdPhotoData` may be omitted in list responses for non-staff to reduce payload size.
+
+Supported `status` values: `pending`, `approved`, `rejected`, `confirmed`, `declined`, `cancelled`, `completed`.
+
+- New bookings default to **`pending`** until front desk or an admin approves or rejects them via the [approval API](#frontdesk-booking-approval).
+- **`approved`** / **`rejected`** set `approvedBy` (MongoDB user id of the staff member) and **`approvedAt`** (ISO timestamp). Rejections may also populate `declineReason`.
+- Legacy documents may still use **`confirmed`** / **`declined`**; the history endpoint treats `declined` like **`rejected`** for listing.
 
 #### `GET /api/bookings`
 
-List bookings visible to the authenticated user.
+List bookings visible to the authenticated user. Each item includes **`guest`** (populated from `guestId`) when available.
 
 **200** — `{ "bookings": [Booking, ...] }`
 
@@ -478,6 +619,176 @@ Delete a booking if accessible.
 
 ---
 
+### Frontdesk booking approval
+
+Front desk and **admin** users can review **`pending`** bookings and move them to **`approved`** or **`rejected`**. Flow: `bookingApproval.routes.js` → `bookingApproval.controller.js` (`getPendingBookingsWithGuest`, `getBookingHistoryWithGuest`, `approveBooking`, `rejectBooking`) → `bookingApproval.service.js` (populate **`Guest`** via `guestId`, business rules).
+
+**Auth:** `Authorization: Bearer <token>` with JWT role **`frontdesk`** or **`admin`**.
+
+**Full list with guest info:** use **`GET /api/bookings`** with a staff token (same data shape as above; includes **`guest`**).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/bookings/pending` | Pending bookings, **`guest`** populated (includes ID fields for verification). |
+| `GET` | `/api/bookings/history` | Approved / rejected / legacy `declined`, with **`guest`**. |
+| `PUT` | `/api/bookings/:id/approve` | Approve a **pending** booking; sets `status`, `approvedBy`, `approvedAt`. |
+| `PUT` | `/api/bookings/:id/reject` | Reject a **pending** booking; optional JSON body `{ "reason": "…" }` (stored in `declineReason`). |
+
+**Rules**
+
+- Target booking must exist and be **`pending`**. Already processed bookings return **409** with `Only pending bookings can be approved or rejected`.
+- Invalid `:id` returns **400**; missing booking returns **404**.
+
+**Example — list pending (curl)**
+
+```bash
+curl -s http://localhost:5000/api/bookings/pending \
+  -H "Authorization: Bearer <frontdesk_or_admin_token>"
+```
+
+**200**
+
+```json
+{
+  "bookings": [
+    {
+      "id": "…",
+      "type": "room",
+      "status": "pending",
+      "customerName": "Jane Doe",
+      "email": "jane@example.com",
+      "guest": {
+        "id": "…",
+        "displayName": "Jane Doe",
+        "email": "jane@example.com",
+        "phone": "09123456789",
+        "validIdNumber": "P1234567"
+      },
+      "checkIn": "2026-05-10",
+      "checkOut": "2026-05-11"
+    }
+  ]
+}
+```
+
+**Example — approve**
+
+```http
+PUT /api/bookings/6610a1b2c3d4e5f678901234/approve HTTP/1.1
+Host: localhost:5000
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{}
+```
+
+**200** — `{ "booking": { …, "status": "approved", "approvedBy": "<userId>", "approvedAt": "<ISO>" } }`
+
+**Example — reject with reason**
+
+```http
+PUT /api/bookings/6610a1b2c3d4e5f678901234/reject HTTP/1.1
+Host: localhost:5000
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"reason": "No availability for those dates"}
+```
+
+**Testing in Postman**
+
+1. **Login** with `POST /api/auth/login` using a user whose `role` is `frontdesk` or `admin`; copy `token`.
+2. Create a **guest** booking with another account (`POST /api/bookings`) so a row stays `pending`.
+3. Call **`GET /api/bookings/pending`** with the staff Bearer token.
+4. **`PUT`** `/api/bookings/<id>/approve` or `/reject` and verify **`GET /api/bookings/history`** shows the result.
+
+The **Front desk dashboard** (`/frontdesk-dashboard`) includes a **Pending guest bookings** table (approve / reject) that consumes these APIs when the user is signed in with a valid JWT.
+
+**After approval:** `bookingApproval.service.js` calls `housekeeping.service.triggerAfterBookingApproved()` so that:
+
+1. The related **room** (`bookings.roomId` → `rooms._id`) or **event venue** (`bookings.eventVenueId` → `eventvenues._id`) is set to operational status **`needs_cleaning`**.
+2. A **`HousekeepingTask`** document is created (`type: "cleaning_request"`, `status: "pending"`, unique per `bookingId`) so housekeeping staff can track work.
+
+Relationships: **`Booking`** references **`Guest`** via `guestId`, and points to catalog rows via **`roomId`** (room bookings) or **`eventVenueId`** (event bookings).
+
+---
+
+### Housekeeping (cleaning tasks)
+
+**Auth:** `Authorization: Bearer <token>` with JWT role **`housekeeping`** or **`admin`**.
+
+Implementation: `housekeeping.routes.js` → `housekeeping.controller.js` → `housekeeping.service.js`. Tasks are stored in **`housekeepingtasks`** (see `models/HousekeepingTask.js`).
+
+#### Workflow
+
+1. Guest submits booking → `Booking.status = pending`.
+2. Front desk **`PUT /api/bookings/:id/approve`** → `Booking.status = approved`, `approvedBy`, `approvedAt`; guest notification sent; **housekeeping trigger** runs (see above).
+3. Housekeeping opens **`GET /api/housekeeping/tasks`** — sees tasks with asset status **`needs_cleaning`**.
+4. **`PUT /api/housekeeping/:id/status`** with `{ "status": "in_progress" }` → task **`in_progress`**, room/venue → **`cleaning_in_progress`**.
+5. **`PUT`** with `{ "status": "completed" }` → task **`completed`**, room/venue → **`ready`**.
+
+**Room / venue operational status** (fields on `rooms` and `eventvenues`): `available` | `occupied` | `needs_cleaning` | `cleaning_in_progress` | `ready` (default `available` for new catalog rows).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/housekeeping/tasks` | List cleaning tasks. Query: `includeCompleted=1` to include completed rows (dashboard stats). |
+| `PUT` | `/api/housekeeping/:id/status` | Advance task: body `{ "status": "in_progress" }` (from **pending**) or `{ "status": "completed" }` (from **in_progress**). |
+
+**200 — list sample**
+
+```json
+{
+  "tasks": [
+    {
+      "id": "…",
+      "type": "cleaning_request",
+      "status": "pending",
+      "targetType": "room",
+      "createdAt": "2026-04-16T12:00:00.000Z",
+      "booking": {
+        "id": "…",
+        "customerName": "Jane Doe",
+        "email": "jane@example.com",
+        "bookingType": "room",
+        "bookingStatus": "approved"
+      },
+      "room": {
+        "id": "…",
+        "title": "Single Suites",
+        "roomNumber": "RM01",
+        "package": "Single Suites",
+        "status": "needs_cleaning"
+      },
+      "eventVenue": null
+    }
+  ]
+}
+```
+
+**200 — update sample**
+
+```http
+PUT /api/housekeeping/6610a1b2c3d4e5f678901234/status HTTP/1.1
+Authorization: Bearer <housekeeping_or_admin_token>
+Content-Type: application/json
+
+{"status":"in_progress"}
+```
+
+```json
+{
+  "task": {
+    "id": "6610a1b2c3d4e5f678901234",
+    "status": "in_progress",
+    "room": { "status": "cleaning_in_progress", "…": "…" }
+  }
+}
+```
+
+The **housekeeping dashboard** (`/dashboard` in the housekeeping app) loads these tasks and exposes **Start cleaning** / **Mark ready** actions.
+
+---
+
 ## Quick reference
 
 | Method | Path | Auth |
@@ -485,6 +796,11 @@ Delete a booking if accessible.
 | `GET` | `/api/health` | No |
 | `POST` | `/api/auth/register` | No |
 | `POST` | `/api/auth/login` | No |
+| `POST` | `/api/auth/logout` | Bearer |
+| `GET` | `/api/staff` | Bearer + admin |
+| `POST` | `/api/staff` | Bearer + admin |
+| `PUT` | `/api/staff/:id` | Bearer + admin |
+| `DELETE` | `/api/staff/:id` | Bearer + admin |
 | `GET` | `/api/users/me` | Bearer |
 | `PATCH` | `/api/users/me` | Bearer |
 | `PATCH` | `/api/users/:id` | Bearer |
@@ -499,15 +815,23 @@ Delete a booking if accessible.
 | `POST` | `/api/event-venues` | Bearer + admin |
 | `PATCH` | `/api/event-venues/:id` | Bearer + admin |
 | `DELETE` | `/api/event-venues/:id` | Bearer + admin |
-| `GET` | `/api/bookings` | Bearer |
+| `GET` | `/api/bookings` | Bearer (includes **`guest`**) |
 | `GET` | `/api/bookings/:id` | Bearer |
 | `POST` | `/api/bookings` | Bearer |
 | `PATCH` | `/api/bookings/:id` | Bearer |
 | `DELETE` | `/api/bookings/:id` | Bearer |
+| `GET` | `/api/bookings/pending` | Bearer + frontdesk or admin |
+| `GET` | `/api/bookings/history` | Bearer + frontdesk or admin |
+| `PUT` | `/api/bookings/:id/approve` | Bearer + frontdesk or admin |
+| `PUT` | `/api/bookings/:id/reject` | Bearer + frontdesk or admin |
+| `GET` | `/api/housekeeping/tasks` | Bearer + housekeeping or admin |
+| `PUT` | `/api/housekeeping/:id/status` | Bearer + housekeeping or admin |
 
 ---
 
 ## Example
+
+**Login**
 
 ```http
 POST /api/auth/login HTTP/1.1
@@ -517,10 +841,35 @@ Content-Type: application/json
 {"email":"user@example.com","password":"Yourpass1!"}
 ```
 
+**Authenticated request**
+
 ```http
 GET /api/users/me HTTP/1.1
 Host: localhost:5000
 Authorization: Bearer <token>
+```
+
+**Logout (invalidate current JWT)**
+
+```http
+POST /api/auth/logout HTTP/1.1
+Host: localhost:5000
+Authorization: Bearer <token>
+```
+
+**Create staff (admin token)**
+
+```bash
+curl -s -X POST http://localhost:5000/api/staff \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <admin_token>" \
+  -d "{\"name\":\"Jane Doe\",\"email\":\"jane@hotel.com\",\"role\":\"Front Desk\",\"department\":\"Front Office\",\"contact\":\"09123456789\",\"status\":\"Active\"}"
+```
+
+**List staff**
+
+```bash
+curl -s http://localhost:5000/api/staff -H "Authorization: Bearer <admin_token>"
 ```
 
 ---

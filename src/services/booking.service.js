@@ -1,5 +1,9 @@
 const mongoose = require("mongoose");
 const Booking = require("../models/Booking");
+const Guest = require("../models/Guest");
+const User = require("../models/User");
+const { findOrCreateGuestFromBookingBody, toPublicGuest } = require("./guest.service");
+const staffNotificationService = require("./staffNotification.service");
 
 const STAFF_ROLES = new Set(["admin", "cashier", "frontdesk", "housekeeping"]);
 
@@ -20,13 +24,146 @@ function assertCanAccess(actor, booking) {
   throw err;
 }
 
-function toPublicBooking(doc) {
+const DEFAULT_POPULATE = [
+  { path: "guestId", model: "Guest" },
+  { path: "approvedBy", select: "email firstName lastName role" },
+];
+
+/**
+ * Include `guest.validIdPhotoData` for anyone authorized on the booking.
+ * Guests only receive their own rows (`actorMatchQuery`); staff receive all.
+ */
+function guestOptsForActor(_actor) {
+  return { includeIdPhotoData: true };
+}
+
+function actorMatchQuery(actor) {
+  if (isStaff(actor.role)) return {};
+  return { userId: new mongoose.Types.ObjectId(String(actor.id)) };
+}
+
+/**
+ * Loads Guest + approvedBy for raw MongoDB booking docs (legacy `guestId` string values, etc.).
+ */
+async function hydrateRawBookings(docs) {
+  const out = [];
+  for (const doc of docs) {
+    const o = { ...doc };
+    const gid = doc.guestId;
+
+    if (gid != null && mongoose.isValidObjectId(gid)) {
+      const gDoc = await Guest.findById(gid).lean();
+      o.guestId = gDoc || null;
+    } else if (typeof gid === "string" && gid.trim() && !mongoose.isValidObjectId(gid)) {
+      o.guestId = null;
+      o._legacyGuestIdString = gid.trim();
+    } else {
+      o.guestId = null;
+    }
+
+    const aid = doc.approvedBy;
+    if (aid != null && mongoose.isValidObjectId(aid)) {
+      o.approvedBy = await User.findById(aid).select("email firstName lastName role").lean();
+    }
+
+    out.push(o);
+  }
+  return out;
+}
+
+async function findBookingsWithPopulateOrRaw(filter, sort) {
+  try {
+    return await Booking.find(filter).populate(DEFAULT_POPULATE).sort(sort).lean();
+  } catch (err) {
+    console.warn("[bookings] Mongoose find/populate failed, using raw collection:", err.message);
+    const coll = mongoose.connection.collection("bookings");
+    const raw = await coll.find(filter).sort(sort).toArray();
+    return hydrateRawBookings(raw);
+  }
+}
+
+async function findOneBookingWithPopulateOrRaw(bookingId) {
+  if (!mongoose.isValidObjectId(bookingId)) return null;
+  let doc = null;
+  try {
+    doc = await Booking.findById(bookingId).populate(DEFAULT_POPULATE).lean();
+  } catch (err) {
+    console.warn("[bookings] findById failed, using raw collection:", err.message);
+  }
+  if (doc) return doc;
+
+  /** Some legacy rows load via native collection only; approve + housekeeping need this row. */
+  const coll = mongoose.connection.collection("bookings");
+  const _id = new mongoose.Types.ObjectId(String(bookingId));
+  const raw = await coll.findOne({ _id });
+  if (!raw) return null;
+  const [h] = await hydrateRawBookings([raw]);
+  return h;
+}
+
+/** Ensures JSON clients always get a string id (avoids duplicate React keys / wrong row lookups). */
+function bookingIdToString(raw) {
+  if (raw == null) return "";
+  if (typeof raw === "string") return raw.trim();
+  if (typeof raw === "object" && raw.$oid) return String(raw.$oid).trim();
+  try {
+    return String(raw).trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Maps a booking document (lean or plain) to API shape with nested `guest`.
+ */
+function toPublicBooking(doc, options = {}) {
   if (!doc) return null;
   const o = typeof doc.toObject === "function" ? doc.toObject() : doc;
+  const includeIdPhoto = options.includeIdPhotoData === true;
+  const publicId = bookingIdToString(o._id);
+
+  let guest = null;
+  if (o.guestId && typeof o.guestId === "object" && o.guestId._id) {
+    guest = toPublicGuest(o.guestId, { includeIdPhotoData: includeIdPhoto });
+  } else if (o._legacyGuestIdString) {
+    guest = {
+      id: null,
+      userId: null,
+      displayName: o.customerName ?? "",
+      email: o.email ?? "",
+      phone: o.contactNumber ?? "",
+      address: o.address ?? "",
+      validIdNumber: String(o._legacyGuestIdString),
+      validIdPhotoName: o.guestIdPhotoName ?? "",
+      ...(includeIdPhoto ? { validIdPhotoData: o.guestIdPhotoData ?? "" } : {}),
+    };
+  } else if (!o.guestId && (o.customerName || o.email)) {
+    guest = {
+      id: null,
+      userId: null,
+      displayName: o.customerName ?? "",
+      email: o.email ?? "",
+      phone: o.contactNumber ?? "",
+      address: o.address ?? "",
+      validIdNumber: "",
+      validIdPhotoName: "",
+      ...(includeIdPhoto ? { validIdPhotoData: "" } : {}),
+    };
+  }
+
+  const guestFk =
+    o.guestId && typeof o.guestId === "object" && o.guestId._id
+      ? o.guestId._id
+      : o.guestId && mongoose.isValidObjectId(o.guestId)
+        ? o.guestId
+        : null;
+
   return {
-    id: o._id,
+    id: publicId,
     type: o.type,
     userId: o.userId,
+    guestId: guestFk,
+    guest,
     customerName: o.customerName ?? "",
     email: o.email ?? "",
     contactNumber: o.contactNumber ?? "",
@@ -35,13 +172,11 @@ function toPublicBooking(doc) {
     additionalRequests: o.additionalRequests ?? "",
     declineReason: o.declineReason ?? "",
     roomId: o.roomId ?? "",
+    roomNumber: o.roomNumber ?? "",
     roomTitle: o.roomTitle ?? "",
     checkIn: o.checkIn ?? "",
     checkOut: o.checkOut ?? "",
     additionalGuests: o.additionalGuests ?? 0,
-    guestId: o.guestId ?? "",
-    guestIdPhotoName: o.guestIdPhotoName ?? "",
-    guestIdPhotoData: o.guestIdPhotoData ?? "",
     eventVenueId: o.eventVenueId ?? "",
     venueName: o.venueName ?? "",
     venuePrice: o.venuePrice ?? "",
@@ -54,6 +189,17 @@ function toPublicBooking(doc) {
     paymentAmount: o.paymentAmount ?? "",
     paymentMethod: o.paymentMethod ?? "",
     transactionId: o.transactionId ?? "",
+    approvedBy:
+      o.approvedBy && typeof o.approvedBy === "object" && o.approvedBy._id
+        ? {
+            id: o.approvedBy._id,
+            email: o.approvedBy.email ?? "",
+            firstName: o.approvedBy.firstName ?? "",
+            lastName: o.approvedBy.lastName ?? "",
+            role: o.approvedBy.role ?? "",
+          }
+        : o.approvedBy ?? null,
+    approvedAt: o.approvedAt ?? null,
     createdAt: o.createdAt,
     updatedAt: o.updatedAt,
   };
@@ -113,17 +259,17 @@ function validateCreate(body) {
 }
 
 async function list(actor) {
-  const q = isStaff(actor.role) ? {} : { userId: actor.id };
-  const rows = await Booking.find(q).sort({ createdAt: -1 }).lean();
-  return rows.map((r) => toPublicBooking(r));
+  const q = actorMatchQuery(actor);
+  const rows = await findBookingsWithPopulateOrRaw(q, { createdAt: -1 });
+  const opts = { includeIdPhotoData: guestOptsForActor(actor).includeIdPhotoData };
+  return rows.map((r) => toPublicBooking(r, opts));
 }
 
 async function getById(bookingId, actor) {
-  if (!mongoose.isValidObjectId(bookingId)) return null;
-  const doc = await Booking.findById(bookingId).lean();
+  const doc = await findOneBookingWithPopulateOrRaw(bookingId);
   if (!doc) return null;
   assertCanAccess(actor, doc);
-  return toPublicBooking(doc);
+  return toPublicBooking(doc, { includeIdPhotoData: true });
 }
 
 async function create(body, actor) {
@@ -139,9 +285,12 @@ async function create(body, actor) {
     status = "pending";
   }
 
+  const guest = await findOrCreateGuestFromBookingBody(actor, body);
+
   const doc = await Booking.create({
     type: body.type,
     userId: actor.id,
+    guestId: guest._id,
     customerName: String(body.customerName).trim(),
     email: String(body.email).toLowerCase().trim(),
     contactNumber: body.contactNumber !== undefined ? String(body.contactNumber).trim() : "",
@@ -158,9 +307,6 @@ async function create(body, actor) {
       const n = Number(body.additionalGuests);
       return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
     })(),
-    guestId: body.guestId !== undefined ? String(body.guestId).trim() : "",
-    guestIdPhotoName: body.guestIdPhotoName !== undefined ? String(body.guestIdPhotoName) : "",
-    guestIdPhotoData: body.guestIdPhotoData !== undefined ? String(body.guestIdPhotoData) : "",
     eventVenueId: body.eventVenueId !== undefined ? String(body.eventVenueId).trim() : "",
     venueName: body.venueName !== undefined ? String(body.venueName).trim() : "",
     venuePrice: body.venuePrice !== undefined ? String(body.venuePrice).trim() : "",
@@ -178,7 +324,16 @@ async function create(body, actor) {
     transactionId: body.transactionId !== undefined ? String(body.transactionId).trim() : "",
   });
 
-  return toPublicBooking(doc);
+  if (!isStaff(actor.role)) {
+    try {
+      await staffNotificationService.createGuestSubmitted(doc, body);
+    } catch (err) {
+      console.warn("[bookings] staff notification:", err.message);
+    }
+  }
+
+  const fresh = await findOneBookingWithPopulateOrRaw(doc._id);
+  return toPublicBooking(fresh, { includeIdPhotoData: true });
 }
 
 async function update(bookingId, body, actor) {
@@ -204,12 +359,10 @@ async function update(bookingId, body, actor) {
     "additionalRequests",
     "declineReason",
     "roomId",
+    "roomNumber",
     "roomTitle",
     "checkIn",
     "checkOut",
-    "guestId",
-    "guestIdPhotoName",
-    "guestIdPhotoData",
     "eventVenueId",
     "venueName",
     "venuePrice",
@@ -259,8 +412,8 @@ async function update(bookingId, body, actor) {
   }
 
   await booking.save();
-  const fresh = await Booking.findById(booking._id).lean();
-  return toPublicBooking(fresh);
+  const fresh = await findOneBookingWithPopulateOrRaw(booking._id);
+  return toPublicBooking(fresh, { includeIdPhotoData: true });
 }
 
 async function remove(bookingId, actor) {
@@ -276,11 +429,16 @@ async function remove(bookingId, actor) {
     throw err;
   }
   assertCanAccess(actor, booking);
+  const lean = await findOneBookingWithPopulateOrRaw(booking._id);
   await Booking.deleteOne({ _id: booking._id });
-  return toPublicBooking(booking);
+  return toPublicBooking(lean, { includeIdPhotoData: false });
 }
 
 module.exports = {
+  toPublicBooking,
+  findBookingsWithPopulateOrRaw,
+  findOneBookingWithPopulateOrRaw,
+  hydrateRawBookings,
   list,
   getById,
   create,

@@ -2,16 +2,15 @@ const { Router } = require("express");
 const eventVenueController = require("../controllers/eventVenue.controller");
 const { authenticate } = require("../middleware/auth");
 const { requireAdmin } = require("../middleware/requireAdmin");
+const { requireHousekeepingOrAdmin } = require("../middleware/roleMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 
 const router = Router();
 
-router.use(authenticate, requireAdmin);
-
-router.get("/", asyncHandler(eventVenueController.list));
-router.get("/:id", asyncHandler(eventVenueController.getById));
-router.post("/", asyncHandler(eventVenueController.create));
-router.patch("/:id", asyncHandler(eventVenueController.update));
-router.delete("/:id", asyncHandler(eventVenueController.remove));
+router.get("/", authenticate, requireHousekeepingOrAdmin, asyncHandler(eventVenueController.list));
+router.get("/:id", authenticate, requireHousekeepingOrAdmin, asyncHandler(eventVenueController.getById));
+router.post("/", authenticate, requireAdmin, asyncHandler(eventVenueController.create));
+router.patch("/:id", authenticate, requireAdmin, asyncHandler(eventVenueController.update));
+router.delete("/:id", authenticate, requireAdmin, asyncHandler(eventVenueController.remove));
 
 module.exports = router;

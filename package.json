@@ -6,7 +6,12 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "create-admin": "node scripts/create-admin.js",
+    "create-frontdesk": "node scripts/create-frontdesk.js",
+    "create-housekeeping": "node scripts/create-housekeeping.js",
+    "seed-demo": "node scripts/seed-demo-users.js",
+    "migrate-booking-guests": "node scripts/migrate-booking-guest-refs.js"
   },
   "engines": {
     "node": ">=18"

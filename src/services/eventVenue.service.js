@@ -103,6 +103,7 @@ function toPublicEventVenue(doc) {
     amenities: features,
     housekeeping: Array.isArray(o.housekeeping) ? o.housekeeping : [],
     image: o.image ?? "",
+    status: o.status ?? "available",
     createdAt: o.createdAt,
     updatedAt: o.updatedAt,
   };
@@ -201,6 +202,15 @@ async function update(id, body) {
   }
   if (housekeeping !== undefined) {
     venue.housekeeping = normalizeStringArray(housekeeping, "housekeeping");
+  }
+  if (body.status !== undefined) {
+    const st = String(body.status).trim();
+    if (!EventVenue.EVENT_VENUE_STATUSES.includes(st)) {
+      const err = new Error(`status must be one of: ${EventVenue.EVENT_VENUE_STATUSES.join(", ")}`);
+      err.status = 400;
+      throw err;
+    }
+    venue.status = st;
   }
 
   try {
