@@ -764,7 +764,7 @@ Relationships: **`Booking`** references **`Guest`** via `guestId`, and points to
 
 ---
 
-### Notifications (frontdesk + guest)
+### Notifications (staff + guest)
 
 **Flow:** `notification.routes.js` -> `notification.controller.js` -> `notification.service.js` -> MongoDB notifications + booking lookup.
 
@@ -794,6 +794,25 @@ Booking-approval files remain in `bookingApproval.routes.js` -> `bookingApproval
 | `GET` | `/api/notifications` | Get notifications for the signed-in user (guest/frontdesk/admin). |
 | `PUT` | `/api/notifications/:id/read` | Mark one notification as read. |
 | `PUT` | `/api/notifications/read-all` | Mark all notifications as read for current user. |
+
+#### Guest notification endpoints (`/api/users/me/notifications`)
+
+These are role-agnostic user inbox endpoints exposed from `user.routes.js` + `guestNotification.controller.js`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/users/me/notifications` | Get current user notification list (guest app inbox shape). |
+| `PATCH` | `/api/users/me/notifications/:notificationId/read` | Mark one notification as read. |
+| `PATCH` | `/api/users/me/notifications/read-all` | Mark all current user notifications as read. |
+
+#### Staff/frontdesk notification endpoints (`/api/staff-notifications`)
+
+`requireFrontdeskOrAdmin` guard.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/staff-notifications` | Frontdesk/admin notification list (booking-review and related staff actions). |
+| `PATCH` | `/api/staff-notifications/read-all` | Mark all frontdesk/admin notifications as read. |
 
 **Frontend behavior**
 
@@ -899,6 +918,9 @@ Implementation: `housekeeping.routes.js` → `housekeeping.controller.js` → `h
 | `GET` | `/api/housekeeping/recent-cleaning` | JSON `{ "recentCleaning": [ … ] }`. Optional query `limit` (1–50). |
 | `GET` | `/api/housekeeping/tasks` | List cleaning tasks. Query: `includeCompleted=1` to include completed rows (dashboard stats). |
 | `PUT` | `/api/housekeeping/:id/status` | Advance task: body `{ "status": "in_progress" }` (from **pending**) or `{ "status": "completed" }` (from **in_progress**). **Housekeeping or admin only.** |
+| `GET` | `/api/housekeeping/notifications` | Housekeeping/admin notification list for cleaning workflow updates. |
+| `PATCH` | `/api/housekeeping/notifications/read-all` | Mark all housekeeping notifications as read. |
+| `POST` | `/api/housekeeping/reconcile-missing` | Backfill missing housekeeping tasks from approved bookings (admin/housekeeping maintenance endpoint). |
 
 **200 — recent-cleaning sample**
 
@@ -1088,7 +1110,7 @@ Set in `.env`:
 AUTO_APPROVE_REVIEWS=true
 ```
 
-When enabled, new reviews are created with **`isApproved: true`** and appear on the homepage immediately. Otherwise, **front desk / admin** must call **`PUT /api/reviews/:id/approve`**.
+When enabled, new reviews are created with **`isApproved: true`** and appear on the homepage immediately. Otherwise, authorized billing staff (**cashier**, **frontdesk**, or **admin**) can call **`PUT /api/reviews/:id/approve`**.
 
 #### API
 
@@ -1096,8 +1118,8 @@ When enabled, new reviews are created with **`isApproved: true`** and appear on 
 |--------|------|------|-------------|
 | `POST` | `/api/reviews` | Bearer + **guest** | Body: `{ "bookingId": "<ObjectId>", "rating": 1-5, "comment": "..." }`. Booking must be **`completed`** and owned by the user. **201:** `{ "review": { … } }`. **409** if a review already exists for that booking. |
 | `GET` | `/api/reviews/me` | Bearer + **guest** | Reviews by the current guest profile (`bookingId`, `isApproved`, etc.). |
-| `GET` | `/api/reviews` | Bearer + **frontdesk or admin** | All reviews (newest first), for moderation. |
-| `PUT` | `/api/reviews/:id/approve` | Bearer + **frontdesk or admin** | Sets `isApproved: true`. |
+| `GET` | `/api/reviews` | Bearer + **cashier, frontdesk, or admin** | All reviews (newest first), for moderation. |
+| `PUT` | `/api/reviews/:id/approve` | Bearer + **cashier, frontdesk, or admin** | Sets `isApproved: true`. |
 | `GET` | `/api/testimonials` | **None** | Approved reviews only, for the marketing site. |
 
 **Example: `GET /api/testimonials`**
@@ -1134,6 +1156,9 @@ When enabled, new reviews are created with **`isApproved: true`** and appear on 
 | `DELETE` | `/api/staff/:id` | Bearer + admin |
 | `GET` | `/api/users/me` | Bearer |
 | `PATCH` | `/api/users/me` | Bearer |
+| `GET` | `/api/users/me/notifications` | Bearer |
+| `PATCH` | `/api/users/me/notifications/:notificationId/read` | Bearer |
+| `PATCH` | `/api/users/me/notifications/read-all` | Bearer |
 | `PATCH` | `/api/users/:id` | Bearer |
 | `GET` | `/api/users/:id` | No |
 | `GET` | `/api/rooms` | No |
@@ -1160,9 +1185,14 @@ When enabled, new reviews are created with **`isApproved: true`** and appear on 
 | `GET` | `/api/notifications` | Bearer |
 | `PUT` | `/api/notifications/:id/read` | Bearer |
 | `PUT` | `/api/notifications/read-all` | Bearer |
+| `GET` | `/api/staff-notifications` | Bearer + frontdesk or admin |
+| `PATCH` | `/api/staff-notifications/read-all` | Bearer + frontdesk or admin |
 | `GET` | `/api/housekeeping/recent-cleaning` | Bearer + frontdesk, housekeeping, or admin |
 | `GET` | `/api/housekeeping/tasks` | Bearer + frontdesk, housekeeping, or admin (read list; status updates still HK/admin) |
 | `PUT` | `/api/housekeeping/:id/status` | Bearer + housekeeping or admin |
+| `GET` | `/api/housekeeping/notifications` | Bearer + housekeeping or admin |
+| `PATCH` | `/api/housekeeping/notifications/read-all` | Bearer + housekeeping or admin |
+| `POST` | `/api/housekeeping/reconcile-missing` | Bearer + housekeeping or admin |
 | `GET` | `/api/guests/me` | Bearer |
 | `GET` | `/api/billing` | Bearer + cashier, frontdesk, or admin |
 | `GET` | `/api/billing/my` | Bearer + guest |
@@ -1171,8 +1201,8 @@ When enabled, new reviews are created with **`isApproved: true`** and appear on 
 | `GET` | `/api/testimonials` | No |
 | `POST` | `/api/reviews` | Bearer + guest |
 | `GET` | `/api/reviews/me` | Bearer + guest |
-| `GET` | `/api/reviews` | Bearer + frontdesk or admin |
-| `PUT` | `/api/reviews/:id/approve` | Bearer + frontdesk or admin |
+| `GET` | `/api/reviews` | Bearer + cashier, frontdesk, or admin |
+| `PUT` | `/api/reviews/:id/approve` | Bearer + cashier, frontdesk, or admin |
 
 ---
 
