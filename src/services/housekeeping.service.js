@@ -65,7 +65,10 @@ async function triggerAfterBookingApproved(fresh) {
     if (type === "room") {
       const rid = oid(fresh.roomId);
       if (rid) {
-        await Room.findByIdAndUpdate(rid, { status: "needs_cleaning" });
+        await Room.updateOne(
+          { _id: rid },
+          { $set: { status: "needs_cleaning", updatedAt: new Date() } }
+        );
       }
       const taskDoc = await HousekeepingTask.create({
         type: "cleaning_request",
@@ -90,7 +93,10 @@ async function triggerAfterBookingApproved(fresh) {
     if (type === "event") {
       const vid = oid(fresh.eventVenueId);
       if (vid) {
-        await EventVenue.findByIdAndUpdate(vid, { status: "needs_cleaning" });
+        await EventVenue.updateOne(
+          { _id: vid },
+          { $set: { status: "needs_cleaning", updatedAt: new Date() } }
+        );
       }
       const taskDoc = await HousekeepingTask.create({
         type: "cleaning_request",
@@ -263,6 +269,72 @@ async function updateTaskStatus(taskId, body, _userId) {
  * Create missing HousekeepingTask rows for approved bookings (repair older data or failed triggers).
  * Safe to call repeatedly; unique index on bookingId prevents duplicates.
  */
+const DEFAULT_RECENT_CLEANING_LIMIT = 10;
+
+/**
+ * Rooms and event venues currently flagged for cleaning, merged and sorted by most recently updated.
+ * @param {{ limit?: number }} opts
+ */
+async function getRecentCleaningTasks({ limit = DEFAULT_RECENT_CLEANING_LIMIT } = {}) {
+  const cap = Math.min(Math.max(Number(limit) || DEFAULT_RECENT_CLEANING_LIMIT, 1), 50);
+  const perSource = Math.min(cap, 25);
+
+  const [rooms, venues] = await Promise.all([
+    Room.find({ status: "needs_cleaning" })
+      .select("title roomNumber status updatedAt")
+      .sort({ updatedAt: -1 })
+      .limit(perSource)
+      .lean(),
+    EventVenue.find({ status: "needs_cleaning" })
+      .select("name eventNum status updatedAt")
+      .sort({ updatedAt: -1 })
+      .limit(perSource)
+      .lean(),
+  ]);
+
+  const roomItems = rooms.map((r) => {
+    const rn = String(r.roomNumber ?? "").trim();
+    const numParsed = Number(rn);
+    const roomId =
+      Number.isFinite(numParsed) && String(numParsed) === rn ? numParsed : rn || String(r._id);
+    const title = String(r.title || "").trim();
+    const roomName = title && rn ? `${title} — Room ${rn}` : title || (rn ? `Room ${rn}` : "Room");
+    return {
+      targetType: "room",
+      id: String(r._id),
+      roomId,
+      roomName,
+      status: r.status,
+      updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : null,
+    };
+  });
+
+  const eventItems = venues.map((v) => {
+    const evNum = String(v.eventNum ?? "").trim();
+    const name = String(v.name || "").trim();
+    const numParsed = Number(evNum);
+    const eventId =
+      Number.isFinite(numParsed) && String(numParsed) === evNum ? numParsed : evNum || String(v._id);
+    const roomName = name && evNum ? `${name} — ${evNum}` : name || (evNum ? `Venue ${evNum}` : "Event venue");
+    return {
+      targetType: "event",
+      id: String(v._id),
+      eventId,
+      roomName,
+      status: v.status,
+      updatedAt: v.updatedAt ? new Date(v.updatedAt).toISOString() : null,
+    };
+  });
+
+  const merged = [...roomItems, ...eventItems].sort((a, b) => {
+    const ta = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+    const tb = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+    return tb - ta;
+  });
+
+  return merged.slice(0, cap);
+}
+
 async function reconcileMissingTasks() {
   const Booking = require("../models/Booking");
   const { findOneBookingWithPopulateOrRaw } = require("./booking.service");
@@ -306,4 +378,5 @@ module.exports = {
   listTasks,
   updateTaskStatus,
   reconcileMissingTasks,
+  getRecentCleaningTasks,
 };

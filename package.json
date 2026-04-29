@@ -11,7 +11,11 @@
     "create-frontdesk": "node scripts/create-frontdesk.js",
     "create-housekeeping": "node scripts/create-housekeeping.js",
     "seed-demo": "node scripts/seed-demo-users.js",
-    "migrate-booking-guests": "node scripts/migrate-booking-guest-refs.js"
+    "migrate-booking-guests": "node scripts/migrate-booking-guest-refs.js",
+    "backfill-billings": "node scripts/backfill-billings.js",
+    "approve-reviews": "node scripts/approve-pending-reviews.js",
+    "db:ping": "node scripts/db-ping.js",
+    "seed:catalog": "node scripts/seed-catalog-rooms-venues.js"
   },
   "engines": {
     "node": ">=18"

@@ -1,4 +1,4 @@
-# Abela / Joanah API
+# Abela / Joanah APIimage.png
 
 REST API for the Abela project: **Express**, **MongoDB** (Mongoose), **JWT** auth, **CORS** enabled for all origins by default.
 
@@ -24,6 +24,8 @@ REST API for the Abela project: **Express**, **MongoDB** (Mongoose), **JWT** aut
 - [Booking endpoints](#booking-endpoints)
 - [Frontdesk booking approval](#frontdesk-booking-approval)
 - [Housekeeping (cleaning tasks)](#housekeeping-cleaning-tasks)
+- [Guest billing system](#guest-billing-system)
+- [Guest reviews & landing testimonials](#guest-reviews--landing-testimonials)
 - [Quick reference](#quick-reference)
 
 ---
@@ -51,19 +53,26 @@ REST API for the Abela project: **Express**, **MongoDB** (Mongoose), **JWT** aut
    | `JWT_SECRET` | yes for login | Long random string used to sign and verify JWTs |
    | `PORT` | no | HTTP port (default **5000**) |
    | `JWT_EXPIRES_IN` | no | Token lifetime (default **7d**). Examples: `24h`, `7d`, `3600` (seconds) |
+   | `AUTO_APPROVE_REVIEWS` | no | If `true` or `1`, new guest reviews are approved immediately for `/api/testimonials` |
 
    On success, the server logs a line when MongoDB connects.
 
 4. **Database**
 
    - Start MongoDB locally, or use Atlas and paste the SRV URI into `MONGODB_URI`.
-   - Collections (`users`, `staff`, `rooms`, `bookings`, `housekeepingtasks`, etc.) are created automatically when first used.
+   - Collections (`users`, `guests`, `rooms`, `bookings`, `billings`, `reviews`, `housekeepingtasks`, etc.) are created automatically when first used. **Staff accounts are rows in `users`** with roles `admin`, `cashier`, `frontdesk`, or `housekeeping` (there is no separate `staff` collection).
 
 5. **Run**
 
    ```bash
    npm run dev    # Node.js --watch: restarts on file changes
    npm start      # Single run (no watch)
+   ```
+
+   **Check MongoDB only** (uses `MONGODB_URI` from `be/abela-be/.env`):
+
+   ```bash
+   npm run db:ping
    ```
 
 6. **Legacy bookings without a Guest link (optional)**  
@@ -73,7 +82,14 @@ REST API for the Abela project: **Express**, **MongoDB** (Mongoose), **JWT** aut
    npm run migrate-booking-guests
    ```
 
-**Legacy data:** If older user documents included a `username` field, remove it in MongoDB or migrate; users are keyed by **`email`** only.
+7. **Billing rows for existing bookings (optional)**  
+   After deploying the guest billing feature, create `Billing` documents for bookings that already existed:
+
+   ```bash
+   npm run backfill-billings
+   ```
+
+**Legacy `username` index:** Some MongoDB databases still have a **unique index on `username`**. Guest signup sets `username` to the same value as **`email`** so new users do not hit `E11000` on `username: null`. Admin/staff seed scripts do the same. Identity for the app remains **`email`** + password; you do not type a separate username on the sign-up form.
 
 ---
 
@@ -90,11 +106,11 @@ be/abela-be/
     ├── config/
     │   ├── index.js        # env (PORT, MONGODB_URI, JWT_*)
     │   └── database.js     # mongoose.connect
-    ├── controllers/        # auth, health, user, room, staff, bookingApproval, housekeeping, …
+    ├── controllers/        # auth, health, user, room, staff, booking, billing, guest, bookingApproval, housekeeping, …
     ├── middleware/         # auth, authMiddleware, adminMiddleware, roleMiddleware, notFound, errorHandler
-    ├── models/             # User, Guest, Staff, Room, Booking, …
+    ├── models/             # User, Guest, Room, Booking, Billing, …
     ├── routes/             # mounted under /api
-    ├── services/           # business logic (e.g. guest, booking, bookingApproval, housekeeping)
+    ├── services/           # business logic (e.g. guest, booking, billing, bookingApproval, housekeeping)
     └── utils/              # passwordValidation, asyncHandler
 ```
 
@@ -108,10 +124,26 @@ be/abela-be/
 | `authMiddleware` | `middleware/authMiddleware.js` | Same behavior as `authenticate` (alias for route modules) |
 | `requireAdmin` | `middleware/requireAdmin.js` | After auth: **403** unless `req.user.role === "admin"` |
 | `adminMiddleware` | `middleware/adminMiddleware.js` | Same as `requireAdmin` (alias) |
-| `requireFrontdeskOrAdmin` | `middleware/roleMiddleware.js` | After auth: **403** unless role is `frontdesk` or `admin` |
-| `requireHousekeepingOrAdmin` | `middleware/roleMiddleware.js` | After auth: **403** unless role is `housekeeping` or `admin` |
+| `requireFrontdeskOrAdmin` | `middleware/roleMiddleware.js` | After auth: **403** unless role is `frontdesk` or `admin` (booking approval, review moderation, etc.) |
+| `requireHousekeepingOrAdmin` | `middleware/roleMiddleware.js` | After auth: **403** unless role is `housekeeping` or `admin` (task list / status updates) |
+| `requireHousekeepingFrontdeskOrAdmin` | `middleware/roleMiddleware.js` | After auth: **403** unless role is `frontdesk`, `housekeeping`, or `admin` (read-only recent cleaning queue for coordination) |
+| `requireBillingStaff` | `middleware/roleMiddleware.js` | After auth: **403** unless role is `cashier`, `frontdesk`, or `admin` (**billing list** and staff read paths that reuse this guard) |
+| `requireCashierOrAdmin` | `middleware/roleMiddleware.js` | After auth: **403** unless role is `cashier` or `admin` (**record payments** on `PUT /api/billing/:id/payment`) |
+| `requireGuestRole` | `middleware/roleMiddleware.js` | After auth: **403** unless JWT role is exactly `guest` (e.g. `GET /api/billing/my`) |
 
-**Staff routes** use `authMiddleware` then `adminMiddleware` so only admins can manage the `staff` collection.
+**`/api/staff` routes** use authentication plus **`admin`** so only admins can create and manage **login accounts** for non-guest roles. Those accounts are stored in the **`users`** collection (not a separate staff table).
+
+### RBAC summary (by area)
+
+| Area | Roles allowed |
+|------|----------------|
+| Booking approve / reject (`PUT /api/bookings/:id/approve`, `…/reject`) | `frontdesk`, `admin` |
+| Housekeeping task status (`PUT /api/housekeeping/:id/status`) | `housekeeping`, `admin` |
+| Room housekeeping status (`PATCH /api/rooms/:id/housekeeping-status`) | `frontdesk`, `admin` |
+| Billing list (`GET /api/billing`) | `cashier`, `frontdesk`, `admin` |
+| Billing detail (`GET /api/billing/:id`) | Same as list, **or** owning `guest` (via booking / guest profile) |
+| Record payment (`PUT /api/billing/:id/payment`) | `cashier`, `admin` only (front desk is read-only for payments) |
+| Own billing (`GET /api/billing/my`) | `guest` only |
 
 ---
 
@@ -133,15 +165,19 @@ Applies to **registration** and to **`newPassword`** on profile updates:
 
 **Email** addresses are normalized (trimmed, lowercased) for login and storage.
 
-### Roles
+### Roles (single `users` table)
 
-| Value | Typical use |
-|-------|-------------|
-| `guest` | Default for `POST /api/auth/register` |
-| `cashier` | Staff |
-| `frontdesk` | Staff |
-| `admin` | Full user management (see below) |
-| `housekeeping` | Staff |
+All accounts—guests and staff—are **`User`** documents. The `role` field is one of:
+
+| Role | Description |
+|------|-------------|
+| `admin` | Full system access; user/staff management; all billing and housekeeping overrides. |
+| `frontdesk` | Manage and approve/reject bookings; view guests, billing, and housekeeping coordination; **no** payment writes on billing API. |
+| `cashier` | View all billing; **record payments** (`amountPaid`); balance and `paymentStatus` are derived. **Cannot** approve bookings or change housekeeping task status. |
+| `housekeeping` | View and update cleaning tasks; room/venue cleaning status workflow. |
+| `guest` | Create bookings; view own bookings and own billing (`/api/billing/my` and owned `GET /api/billing/:id`). |
+
+**`users` collection (main fields):** MongoDB `_id`, `email`, `passwordHash` (bcrypt; API uses the term **password** on register / staff create), `role`, optional `name`, `firstName`, `lastName`, `phone`, `username` (often equal to `email` for legacy indexes), and for staff rows optional `department`, `staffStatus`. Timestamps: `createdAt`, `updatedAt`.
 
 - **Self-service** registration always creates **`guest`**.  
 - **Changing roles:** Non-admins cannot set `role` via the API. **Admins** can set another user’s `role` with **`PATCH /api/users/:id`** when `:id` is **not** their own user id.  
@@ -222,7 +258,9 @@ Ends the current session by **blacklisting the JWT** until its natural expiry (s
 
 All `/api/staff` routes require **`Authorization: Bearer <token>`** and **`role: "admin"`** in that token.
 
-**Staff object**
+These endpoints manage **`User`** rows with non-guest roles (same collection as guest accounts). The API response shape is still called **staff** for the admin UI.
+
+**Staff object (API)**
 
 ```json
 {
@@ -238,8 +276,8 @@ All `/api/staff` routes require **`Authorization: Bearer <token>`** and **`role:
 }
 ```
 
-Allowed `role` values: `Admin`, `Front Desk`, `Housekeeping`, `Cashier`.  
-Allowed `status` values: `Active`, `On Leave`, `Inactive`.
+Allowed `role` values (request / display): `Admin`, `Front Desk`, `Housekeeping`, `Cashier` (stored on the user as `admin`, `frontdesk`, `housekeeping`, `cashier`).  
+Allowed `status` values: `Active`, `On Leave`, `Inactive` (stored as `staffStatus` on the user).
 
 #### `GET /api/staff`
 
@@ -251,17 +289,18 @@ List all staff (newest first).
 
 #### `POST /api/staff`
 
-Create a staff record.
+Create a **user account** for a staff role (hashed password stored on `User`).
 
 **Body**
 
 | Field | Required | Notes |
 |-------|----------|--------|
-| `name` | yes | Non-empty string |
+| `name` | yes | Non-empty string (also used as display name) |
 | `email` | yes | Unique |
-| `role` | yes | One of the allowed values |
+| `password` | yes | [Password rules](#conventions); required so the person can sign in |
+| `role` | yes | One of the allowed display values |
 | `department` | yes | e.g. `Operations` |
-| `contact` | no | Phone / extension (stored trimmed) |
+| `contact` | no | Phone / extension (stored on `User.phone`, trimmed) |
 | `status` | no | Defaults to `Active` |
 
 **201** — `{ "staff": Staff }`
@@ -270,7 +309,7 @@ Create a staff record.
 
 #### `PUT /api/staff/:id`
 
-Update a staff member (partial body supported: send only fields to change).
+Update a staff user (partial body supported: send only fields to change). Optional **`password`** sets a new login password (must meet [password rules](#conventions)).
 
 **200** — `{ "staff": Staff }`
 
@@ -404,6 +443,18 @@ Partial update for any room fields in the create payload.
 
 **Errors:** `400` invalid id/validation, `404` not found, `409` duplicate `roomNumber`.
 
+#### `PATCH /api/rooms/:id/housekeeping-status`
+
+Partial update: **`status` only**, restricted to **`needs_cleaning`** and **`ready`** (`ready` is guest-ready and shown as “Available” in the front desk housekeeping UI).
+
+**Auth:** Bearer + **front desk** or **admin** (not housekeeping-only).
+
+**Body:** `{ "status": "needs_cleaning" | "ready" }`
+
+**200** — `{ "room": Room }`
+
+**Errors:** `400` invalid id or status, `404` not found.
+
 #### `DELETE /api/rooms/:id`
 
 Delete a room.
@@ -416,7 +467,7 @@ Delete a room.
 
 ### Event venue endpoints
 
-All `/api/event-venues` routes require **Bearer auth** and **admin role**.
+**Bearer auth** is required for all `/api/event-venues` routes. **`GET /api/event-venues`** and **`GET /api/event-venues/:id`** allow **front desk**, **housekeeping**, or **admin** (read-only catalog for staff dashboards). **`POST`**, **`PATCH`**, and **`DELETE`** require **admin**.
 
 **Event venue object**
 
@@ -713,6 +764,110 @@ Relationships: **`Booking`** references **`Guest`** via `guestId`, and points to
 
 ---
 
+### Notifications (frontdesk + guest)
+
+**Flow:** `notification.routes.js` -> `notification.controller.js` -> `notification.service.js` -> MongoDB notifications + booking lookup.
+
+Booking-approval files remain in `bookingApproval.routes.js` -> `bookingApproval.controller.js` -> `bookingApproval.service.js`.
+
+#### Notification workflow
+
+1. Guest creates a booking (`POST /api/bookings`) -> frontdesk notification created with type **`booking_review`** and linked `bookingId`.
+2. Frontdesk/admin approves (`PUT /api/bookings/:id/approve`) -> booking status moves to `approved`, guest notification created with type **`booking_approved`**.
+3. Frontdesk/admin rejects (`PUT /api/bookings/:id/reject`) -> booking status moves to `rejected`, guest rejection notification is also emitted.
+4. Frontend bell dropdowns poll and refresh, each row carries `bookingId` for direct action or navigation.
+
+#### Notification schema (API shape)
+
+- `id`
+- `userId` (receiver)
+- `bookingId` (linked booking)
+- `type` (`booking_review`, `booking_approved`, plus existing legacy-compatible values)
+- `message`
+- `isRead` / `read`
+- `createdAt`
+
+#### Notification API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/notifications` | Get notifications for the signed-in user (guest/frontdesk/admin). |
+| `PUT` | `/api/notifications/:id/read` | Mark one notification as read. |
+| `PUT` | `/api/notifications/read-all` | Mark all notifications as read for current user. |
+
+**Frontend behavior**
+
+- Frontdesk: clicking a booking-review notification opens the booking review modal (guest/booking/room-event details + approve/reject actions).
+- Guest: clicking a booking notification routes to `/my-bookings/:bookingId` (booking details/status/payment context).
+
+---
+
+### Frontdesk unified module
+
+**Flow:** `frontdesk.routes.js` -> `frontdesk.controller.js` -> `frontdesk.service.js` -> MongoDB.
+
+**Goal:** one API call that returns integrated booking context for frontdesk/admin (guest + booking + billing + room/event + housekeeping).
+
+#### Endpoint
+
+| Method | Path | Auth |
+|--------|------|------|
+| `GET` | `/api/frontdesk/summary` | Bearer + frontdesk or admin |
+| `GET` | `/api/frontdesk/bookings/:id` | Bearer + frontdesk or admin |
+
+**`GET /api/frontdesk/summary`** returns `{ reservationsToday, checkOutsToday, totalRevenue, outstandingBalances }` computed from the same MongoDB queries as staff booking and billing lists (ledger totals plus bookings without a billing row yet).
+
+#### Data relationships
+
+- **Booking** is the base row (`bookings._id`).
+- **Guest** comes from `booking.guestId` (fallback: booking contact fields).
+- **Billing** comes from `billings.bookingId = booking._id`.
+- **Room/Event** is resolved by `booking.roomId` or `booking.eventVenueId`.
+- **HousekeepingTask** comes from `housekeepingtasks.bookingId = booking._id` (latest row).
+
+#### Example response
+
+```json
+{
+  "guest": {
+    "id": "6622...",
+    "name": "Jane Doe",
+    "email": "jane@example.com",
+    "contact": "09123456789"
+  },
+  "booking": {
+    "id": "6610...",
+    "type": "room",
+    "status": "pending",
+    "roomOrEvent": "Single Suites",
+    "roomId": "65ff...",
+    "eventVenueId": ""
+  },
+  "billing": {
+    "id": "6633...",
+    "totalAmount": 2205,
+    "amountPaid": 661.5,
+    "balance": 1543.5,
+    "paymentStatus": "partial"
+  },
+  "room": {
+    "targetType": "room",
+    "id": "65ff...",
+    "name": "Single Suites",
+    "status": "needs_cleaning",
+    "roomNumber": "RM01"
+  },
+  "housekeeping": {
+    "targetType": "room",
+    "roomOrEventStatus": "needs_cleaning",
+    "taskStatus": "pending",
+    "taskId": "6644..."
+  }
+}
+```
+
+---
+
 ### Housekeeping (cleaning tasks)
 
 **Auth:** `Authorization: Bearer <token>` with JWT role **`housekeeping`** or **`admin`**.
@@ -727,12 +882,40 @@ Implementation: `housekeeping.routes.js` → `housekeeping.controller.js` → `h
 4. **`PUT /api/housekeeping/:id/status`** with `{ "status": "in_progress" }` → task **`in_progress`**, room/venue → **`cleaning_in_progress`**.
 5. **`PUT`** with `{ "status": "completed" }` → task **`completed`**, room/venue → **`ready`**.
 
-**Room / venue operational status** (fields on `rooms` and `eventvenues`): `available` | `occupied` | `needs_cleaning` | `cleaning_in_progress` | `ready` (default `available` for new catalog rows).
+**Room / venue operational status** (fields on `rooms` and `eventvenues`): `available` | `occupied` | `needs_cleaning` | `cleaning_in_progress` | `ready` (default `available` for new catalog rows). Compound indexes **`{ status: 1, updatedAt: -1 }`** on `rooms` and `eventvenues` support the recent-cleaning query.
+
+**Booking approval:** `bookingApproval.service` calls `triggerAfterBookingApproved`, which sets the linked room or venue to **`needs_cleaning`** and bumps **`updatedAt`**, creates a **`HousekeepingTask`** (unique **`bookingId`**, so duplicate tasks are avoided), and notifies housekeeping.
+
+#### Recent cleaning queue (front desk UI)
+
+**Feature:** Read-only list of rooms and venues with status **`needs_cleaning`**, merged and sorted by **`updatedAt`** (newest first). Used by the **front desk dashboard** only—not on the front desk Housekeeping page or the housekeeping staff app dashboard.
+
+**Auth:** Bearer with role **`frontdesk`**, **`housekeeping`**, or **`admin`** (`requireHousekeepingFrontdeskOrAdmin`).
+
+**Service:** `housekeeping.service.getRecentCleaningTasks()`.
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/api/housekeeping/recent-cleaning` | JSON `{ "recentCleaning": [ … ] }`. Optional query `limit` (1–50). |
 | `GET` | `/api/housekeeping/tasks` | List cleaning tasks. Query: `includeCompleted=1` to include completed rows (dashboard stats). |
-| `PUT` | `/api/housekeeping/:id/status` | Advance task: body `{ "status": "in_progress" }` (from **pending**) or `{ "status": "completed" }` (from **in_progress**). |
+| `PUT` | `/api/housekeeping/:id/status` | Advance task: body `{ "status": "in_progress" }` (from **pending**) or `{ "status": "completed" }` (from **in_progress**). **Housekeeping or admin only.** |
+
+**200 — recent-cleaning sample**
+
+```json
+{
+  "recentCleaning": [
+    {
+      "targetType": "room",
+      "id": "6644ab12cd34ef5678901234",
+      "roomId": 101,
+      "roomName": "Single Suites — Room 101",
+      "status": "needs_cleaning",
+      "updatedAt": "2026-04-26T08:00:00.000Z"
+    }
+  ]
+}
+```
 
 **200 — list sample**
 
@@ -785,7 +968,155 @@ Content-Type: application/json
 }
 ```
 
-The **housekeeping dashboard** (`/dashboard` in the housekeeping app) loads these tasks and exposes **Start cleaning** / **Mark ready** actions.
+The **housekeeping staff dashboard** loads **`GET /api/housekeeping/tasks`** and exposes **Start cleaning** / **Mark ready** actions (**`PUT /api/housekeeping/:id/status`** remains housekeeping/admin only). The **front desk dashboard** loads **`GET /api/housekeeping/recent-cleaning`** and **`GET /api/housekeeping/tasks`** (read-only for front desk) for a combined cleaning queue.
+
+---
+
+### Guest billing system
+
+**Feature:** Each booking can have one **Billing** ledger row. **Balance** is `max(0, totalAmount - amountPaid)` in API responses. **`paymentStatus`** (`paid` \| `partial` \| `unpaid`) is kept consistent on save by the Billing model from `totalAmount` and `amountPaid`. **Cashier, front desk, and admin** can list and open any ledger; **cashier and admin** record payments via **`PUT /api/billing/:id/payment`**; **guest** accounts see only their own rows (by `Booking.userId` or linked `Guest.userId`).
+
+**Flow:** `billing.routes.js` → `billing.controller.js` → `billing.service.js` → MongoDB (`billings`, `bookings`, `guests`). `guest.routes.js` / `guest.controller.js` expose **`GET /api/guests/me`** for the logged-in user’s **Guest** profile (separate from `/api/users/me`).
+
+#### Database schema (MongoDB)
+
+| Collection | Purpose |
+|------------|---------|
+| **`guests`** | Guest profile: `displayName`, `email`, `phone`, optional `userId` → registered **User**. API billing responses map **`name`** ← `displayName`, **`contactNumber`** ← `phone`. |
+| **`bookings`** | Existing model: `guestId` → Guest, `userId` → User who created the booking, monetary fields (`totalAmount`, `venuePrice`, `paymentAmount`, …). |
+| **`billings`** | One document per booking: `guestId`, `bookingId` (unique), `totalAmount`, `amountPaid`, `paymentStatus`, timestamps (`createdAt`, `updatedAt`). |
+
+**Relationships**
+
+- **Guest** → has many **Bookings** (`Booking.guestId`).
+- **Booking** → belongs to **Guest** and **User** (`userId`).
+- **Billing** → belongs to **Guest** and **Booking** (`guestId`, `bookingId`).
+
+**Derived values**
+
+- `balance = max(0, totalAmount - amountPaid)` (returned in JSON; not stored separately).
+- `paymentStatus`: **`paid`** if balance is zero; **`partial`** if `amountPaid > 0` but not full; **`unpaid`** if no payment.
+
+On **new bookings**, the API creates a **Billing** row when the booking has a valid `guestId`. **`PATCH /api/bookings/:id`** syncs totals/paid from the booking into **Billing** when payment fields change. **`PUT /api/billing/:id/payment`** (staff) is the canonical way to record payments and also updates **`bookings.paymentAmount`**. Deleting a booking removes its **Billing** row.
+
+#### Auth
+
+| Role | Billing access |
+|------|----------------|
+| `cashier`, `frontdesk`, `admin` | `GET /api/billing`, `GET /api/billing/:id` for any record |
+| `cashier`, `admin` | `PUT /api/billing/:id/payment` (record `amountPaid`; balance and status updated automatically) |
+| `frontdesk` | **No** `PUT /api/billing/:id/payment` (**403**); use cashier or admin for payment entry |
+| `guest` | `GET /api/billing/my`, `GET /api/billing/:id` only when the billing’s guest or booking is theirs |
+| `housekeeping` | No general billing list/detail (**403**) |
+
+All billing routes require **`Authorization: Bearer <token>`**.
+
+#### Guest profile
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/guests/me` | Bearer | Current user’s **Guest** document (`name` / `email` / `contactNumber` shape plus ids). **`guest` may be `null`** until a profile exists. |
+
+#### Billing API
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/billing` | Bearer + **cashier, frontdesk, or admin** | All billing records, newest first. **200:** `{ "records": [ … ] }` |
+| `GET` | `/api/billing/my` | Bearer + **guest** role | Billing rows for the current guest only. **200:** `{ "records": [ … ] }` |
+| `GET` | `/api/billing/:id` | Bearer | One record if **cashier / frontdesk / admin** **or** owner guest. |
+| `PUT` | `/api/billing/:id/payment` | Bearer + **cashier or admin** | Body: `{ "amountPaid": <number> }` (non-negative, cannot exceed `totalAmount`). **200:** same shape as a single list item. |
+
+**Single record shape (list items and `GET /api/billing/:id`)**
+
+```json
+{
+  "id": "<Billing ObjectId>",
+  "guest": {
+    "name": "John Doe",
+    "email": "john@email.com",
+    "contactNumber": "09171234567"
+  },
+  "booking": {
+    "id": "<Booking ObjectId>",
+    "type": "room",
+    "room": "Deluxe King (101)",
+    "status": "approved",
+    "checkIn": "2026-05-10",
+    "checkOut": "2026-05-11",
+    "eventDate": ""
+  },
+  "billing": {
+    "totalAmount": 5000,
+    "amountPaid": 3000,
+    "balance": 2000,
+    "paymentStatus": "partial",
+    "createdAt": "<ISO date>",
+    "updatedAt": "<ISO date>"
+  }
+}
+```
+
+For **event** bookings, `booking.room` is a label built from **venue / event title** (the field name stays `room` for a stable client shape).
+
+**Errors:** `400` invalid id or invalid `amountPaid`; `401` missing/invalid token; `403` wrong role or not your billing; `404` unknown billing id or missing booking for that billing.
+
+---
+
+### Guest reviews & landing testimonials
+
+**Feature:** Guests submit a **review** after a booking is **`completed`**. Reviews are stored with optional moderation (`isApproved`). The **public** landing page loads **`GET /api/testimonials`**, which returns only **approved** reviews as testimonial cards (guest name, rating, comment).
+
+**Flow:** `review.routes.js` / `testimonial.routes.js` → controllers → `review.service.js` / `testimonial.service.js` → MongoDB collection **`reviews`**.
+
+#### Database schema (MongoDB)
+
+| Collection | Fields (main) |
+|------------|----------------|
+| **`reviews`** | `guestId` → Guest (required), `bookingId` → Booking (**unique** — one review per booking), `rating` (1–5), `comment` (string, max 2000), `isApproved` (boolean, default `false`), `createdAt` / `updatedAt`. |
+| **`guests`** | Existing profile; testimonial **name** uses `displayName`, with fallback to booking `customerName`. |
+
+**Relationships**
+
+- **Review** → belongs to **Guest** (`guestId`).
+- **Review** → belongs to **Booking** (`bookingId`).
+
+#### Auto-approval (optional)
+
+Set in `.env`:
+
+```env
+AUTO_APPROVE_REVIEWS=true
+```
+
+When enabled, new reviews are created with **`isApproved: true`** and appear on the homepage immediately. Otherwise, **front desk / admin** must call **`PUT /api/reviews/:id/approve`**.
+
+#### API
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/reviews` | Bearer + **guest** | Body: `{ "bookingId": "<ObjectId>", "rating": 1-5, "comment": "..." }`. Booking must be **`completed`** and owned by the user. **201:** `{ "review": { … } }`. **409** if a review already exists for that booking. |
+| `GET` | `/api/reviews/me` | Bearer + **guest** | Reviews by the current guest profile (`bookingId`, `isApproved`, etc.). |
+| `GET` | `/api/reviews` | Bearer + **frontdesk or admin** | All reviews (newest first), for moderation. |
+| `PUT` | `/api/reviews/:id/approve` | Bearer + **frontdesk or admin** | Sets `isApproved: true`. |
+| `GET` | `/api/testimonials` | **None** | Approved reviews only, for the marketing site. |
+
+**Example: `GET /api/testimonials`**
+
+```json
+{
+  "testimonials": [
+    {
+      "guestName": "John Doe",
+      "rating": 5,
+      "comment": "Excellent service and clean rooms!"
+    }
+  ]
+}
+```
+
+**Validation errors:** `400` invalid ids, rating out of range, or empty comment; `403` not your booking; `404` booking not found; `409` booking not completed or duplicate review.
+
+**Frontend:** The landing page (`TestimonialsSection`) calls **`GET /api/testimonials`** on load and periodically while the tab is visible. Guests submit from **Booking History** after checkout is marked **completed** (requires a **Guest** profile linked to the booking flow).
 
 ---
 
@@ -810,8 +1141,8 @@ The **housekeeping dashboard** (`/dashboard` in the housekeeping app) loads thes
 | `POST` | `/api/rooms` | Bearer + admin |
 | `PATCH` | `/api/rooms/:id` | Bearer + admin |
 | `DELETE` | `/api/rooms/:id` | Bearer + admin |
-| `GET` | `/api/event-venues` | Bearer + admin |
-| `GET` | `/api/event-venues/:id` | Bearer + admin |
+| `GET` | `/api/event-venues` | Bearer + frontdesk, housekeeping, or admin |
+| `GET` | `/api/event-venues/:id` | Bearer + frontdesk, housekeeping, or admin |
 | `POST` | `/api/event-venues` | Bearer + admin |
 | `PATCH` | `/api/event-venues/:id` | Bearer + admin |
 | `DELETE` | `/api/event-venues/:id` | Bearer + admin |
@@ -824,8 +1155,24 @@ The **housekeeping dashboard** (`/dashboard` in the housekeeping app) loads thes
 | `GET` | `/api/bookings/history` | Bearer + frontdesk or admin |
 | `PUT` | `/api/bookings/:id/approve` | Bearer + frontdesk or admin |
 | `PUT` | `/api/bookings/:id/reject` | Bearer + frontdesk or admin |
-| `GET` | `/api/housekeeping/tasks` | Bearer + housekeeping or admin |
+| `GET` | `/api/frontdesk/summary` | Bearer + frontdesk or admin |
+| `GET` | `/api/frontdesk/bookings/:id` | Bearer + frontdesk or admin |
+| `GET` | `/api/notifications` | Bearer |
+| `PUT` | `/api/notifications/:id/read` | Bearer |
+| `PUT` | `/api/notifications/read-all` | Bearer |
+| `GET` | `/api/housekeeping/recent-cleaning` | Bearer + frontdesk, housekeeping, or admin |
+| `GET` | `/api/housekeeping/tasks` | Bearer + frontdesk, housekeeping, or admin (read list; status updates still HK/admin) |
 | `PUT` | `/api/housekeeping/:id/status` | Bearer + housekeeping or admin |
+| `GET` | `/api/guests/me` | Bearer |
+| `GET` | `/api/billing` | Bearer + cashier, frontdesk, or admin |
+| `GET` | `/api/billing/my` | Bearer + guest |
+| `GET` | `/api/billing/:id` | Bearer (owner guest or cashier/frontdesk/admin) |
+| `PUT` | `/api/billing/:id/payment` | Bearer + cashier or admin |
+| `GET` | `/api/testimonials` | No |
+| `POST` | `/api/reviews` | Bearer + guest |
+| `GET` | `/api/reviews/me` | Bearer + guest |
+| `GET` | `/api/reviews` | Bearer + frontdesk or admin |
+| `PUT` | `/api/reviews/:id/approve` | Bearer + frontdesk or admin |
 
 ---
 
@@ -857,13 +1204,13 @@ Host: localhost:5000
 Authorization: Bearer <token>
 ```
 
-**Create staff (admin token)**
+**Create staff user (admin token)**
 
 ```bash
 curl -s -X POST http://localhost:5000/api/staff \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <admin_token>" \
-  -d "{\"name\":\"Jane Doe\",\"email\":\"jane@hotel.com\",\"role\":\"Front Desk\",\"department\":\"Front Office\",\"contact\":\"09123456789\",\"status\":\"Active\"}"
+  -d "{\"name\":\"Jane Doe\",\"email\":\"jane@hotel.com\",\"password\":\"Yourpass1!\",\"role\":\"Front Desk\",\"department\":\"Front Office\",\"contact\":\"09123456789\",\"status\":\"Active\"}"
 ```
 
 **List staff**

@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const GuestNotification = require("../models/GuestNotification");
+const Booking = require("../models/Booking");
 
 function bookingLabel(doc) {
   if (!doc || typeof doc !== "object") return "your booking";
@@ -84,13 +85,68 @@ function toPublic(doc) {
   };
 }
 
+/** Snapshot of the linked booking for the guest notification panel (full context). */
+function bookingSummaryPublic(b) {
+  if (!b || typeof b !== "object") return null;
+  return {
+    id: b._id != null ? String(b._id) : "",
+    type: b.type || "",
+    status: b.status || "",
+    customerName: String(b.customerName || "").trim(),
+    email: String(b.email || "").trim(),
+    contactNumber: String(b.contactNumber || "").trim(),
+    address: String(b.address || "").trim(),
+    roomId: String(b.roomId || "").trim(),
+    roomNumber: String(b.roomNumber || "").trim(),
+    roomTitle: String(b.roomTitle || "").trim(),
+    checkIn: String(b.checkIn || "").trim(),
+    checkOut: String(b.checkOut || "").trim(),
+    eventVenueId: String(b.eventVenueId || "").trim(),
+    venueName: String(b.venueName || "").trim(),
+    venuePrice: String(b.venuePrice || "").trim(),
+    eventTitle: String(b.eventTitle || "").trim(),
+    eventDate: String(b.eventDate || "").trim(),
+    eventEndDate: String(b.eventEndDate || "").trim(),
+    timeSlot: String(b.timeSlot || "").trim(),
+    expectedPax: b.expectedPax != null ? Number(b.expectedPax) : null,
+    declineReason: String(b.declineReason || "").trim(),
+    totalAmount: String(b.totalAmount || "").trim(),
+    paymentAmount: String(b.paymentAmount || "").trim(),
+    paymentMethod: String(b.paymentMethod || "").trim(),
+    transactionId: String(b.transactionId || "").trim(),
+    additionalRequests: String(b.additionalRequests || "").trim(),
+  };
+}
+
+async function attachBookingsToNotificationRows(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const ids = [];
+  for (const r of rows) {
+    const bid = r.bookingId;
+    if (bid != null && mongoose.isValidObjectId(bid)) {
+      ids.push(new mongoose.Types.ObjectId(String(bid)));
+    }
+  }
+  if (ids.length === 0) {
+    return rows.map((r) => ({ ...toPublic(r), booking: null }));
+  }
+  const bookings = await Booking.find({ _id: { $in: ids } }).lean();
+  const byId = new Map(bookings.map((b) => [String(b._id), b]));
+  return rows.map((r) => {
+    const pub = toPublic(r);
+    const key = r.bookingId != null ? String(r.bookingId) : "";
+    const b = key && byId.has(key) ? byId.get(key) : null;
+    return { ...pub, booking: bookingSummaryPublic(b) };
+  });
+}
+
 async function listForUser(userId, { limit = 50 } = {}) {
   const uid = new mongoose.Types.ObjectId(String(userId));
   const rows = await GuestNotification.find({ userId: uid })
     .sort({ createdAt: -1 })
     .limit(Math.min(Number(limit) || 50, 100))
     .lean();
-  const notifications = rows.map((r) => toPublic(r));
+  const notifications = await attachBookingsToNotificationRows(rows);
   const unreadCount = notifications.filter((n) => !n.read).length;
   return { notifications, unreadCount };
 }
@@ -113,7 +169,8 @@ async function markRead(userId, notificationId) {
     err.status = 404;
     throw err;
   }
-  return toPublic(updated);
+  const [enriched] = await attachBookingsToNotificationRows([updated]);
+  return enriched || toPublic(updated);
 }
 
 async function markAllRead(userId) {

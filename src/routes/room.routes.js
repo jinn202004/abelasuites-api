@@ -2,6 +2,7 @@ const { Router } = require("express");
 const roomController = require("../controllers/room.controller");
 const { authenticate } = require("../middleware/auth");
 const { requireAdmin } = require("../middleware/requireAdmin");
+const { requireFrontdeskOrAdmin } = require("../middleware/roleMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 
 const router = Router();
@@ -9,6 +10,13 @@ const router = Router();
 // Public catalog — browse rooms without auth (create/update/delete remain admin-only).
 router.get("/", asyncHandler(roomController.list));
 router.get("/:id", asyncHandler(roomController.getById));
+
+router.patch(
+  "/:id/housekeeping-status",
+  authenticate,
+  requireFrontdeskOrAdmin,
+  asyncHandler(roomController.patchHousekeepingStatus)
+);
 
 router.use(authenticate, requireAdmin);
 

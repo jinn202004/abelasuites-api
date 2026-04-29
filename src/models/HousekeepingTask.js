@@ -48,6 +48,7 @@ const housekeepingTaskSchema = new mongoose.Schema(
 );
 
 housekeepingTaskSchema.index({ createdAt: -1 });
+housekeepingTaskSchema.index({ status: 1, updatedAt: -1 });
 
 const HousekeepingTask = mongoose.model("HousekeepingTask", housekeepingTaskSchema);
 

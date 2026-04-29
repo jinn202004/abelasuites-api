@@ -1,9 +1,11 @@
 const mongoose = require("mongoose");
 const Booking = require("../models/Booking");
+const Billing = require("../models/Billing");
 const Guest = require("../models/Guest");
 const User = require("../models/User");
 const { findOrCreateGuestFromBookingBody, toPublicGuest } = require("./guest.service");
 const staffNotificationService = require("./staffNotification.service");
+const billingService = require("./billing.service");
 
 const STAFF_ROLES = new Set(["admin", "cashier", "frontdesk", "housekeeping"]);
 
@@ -113,6 +115,34 @@ function bookingIdToString(raw) {
   }
 }
 
+function parseMoneyAmount(v) {
+  if (v == null || v === "") return NaN;
+  const n = Number(String(v).replace(/[₱,\s]/g, ""));
+  return Number.isFinite(n) ? n : NaN;
+}
+
+/**
+ * Guests sometimes enter a GCash amount above the quoted total; keep API amounts consistent for UIs.
+ * Does not change persisted Mongo values — only the serialized `paymentAmount` on reads.
+ */
+function capPaymentAmountForResponse(type, totalAmountStr, venuePriceStr, paymentAmountStr) {
+  const raw = parseMoneyAmount(paymentAmountStr);
+  if (!Number.isFinite(raw) || raw < 0) return String(paymentAmountStr ?? "").trim();
+
+  let capTotal = NaN;
+  if (type === "event") {
+    const tt = parseMoneyAmount(totalAmountStr);
+    const vp = parseMoneyAmount(venuePriceStr);
+    capTotal = Number.isFinite(tt) ? tt : vp;
+  } else {
+    capTotal = parseMoneyAmount(totalAmountStr);
+  }
+
+  if (!Number.isFinite(capTotal) || capTotal <= 0) return String(paymentAmountStr ?? "").trim();
+  if (raw <= capTotal) return String(paymentAmountStr ?? "").trim();
+  return String(capTotal);
+}
+
 /**
  * Maps a booking document (lean or plain) to API shape with nested `guest`.
  */
@@ -158,6 +188,15 @@ function toPublicBooking(doc, options = {}) {
         ? o.guestId
         : null;
 
+  const totalAmountStr = o.totalAmount ?? "";
+  const venuePriceStr = o.venuePrice ?? "";
+  const paymentAmountStr = capPaymentAmountForResponse(
+    o.type,
+    totalAmountStr,
+    venuePriceStr,
+    o.paymentAmount ?? "",
+  );
+
   return {
     id: publicId,
     type: o.type,
@@ -179,14 +218,14 @@ function toPublicBooking(doc, options = {}) {
     additionalGuests: o.additionalGuests ?? 0,
     eventVenueId: o.eventVenueId ?? "",
     venueName: o.venueName ?? "",
-    venuePrice: o.venuePrice ?? "",
-    totalAmount: o.totalAmount ?? "",
+    venuePrice: venuePriceStr,
+    totalAmount: totalAmountStr,
     eventTitle: o.eventTitle ?? "",
     eventDate: o.eventDate ?? "",
     eventEndDate: o.eventEndDate ?? "",
     expectedPax: o.expectedPax ?? 1,
     timeSlot: o.timeSlot ?? "",
-    paymentAmount: o.paymentAmount ?? "",
+    paymentAmount: paymentAmountStr,
     paymentMethod: o.paymentMethod ?? "",
     transactionId: o.transactionId ?? "",
     approvedBy:
@@ -333,6 +372,14 @@ async function create(body, actor) {
   }
 
   const fresh = await findOneBookingWithPopulateOrRaw(doc._id);
+  try {
+    const raw = await Booking.findById(doc._id)
+      .populate({ path: "guestId", model: "Guest" })
+      .lean();
+    if (raw) await billingService.ensureBillingForBooking(raw);
+  } catch (err) {
+    console.warn("[bookings] billing ensure:", err.message);
+  }
   return toPublicBooking(fresh, { includeIdPhotoData: true });
 }
 
@@ -413,6 +460,11 @@ async function update(bookingId, body, actor) {
 
   await booking.save();
   const fresh = await findOneBookingWithPopulateOrRaw(booking._id);
+  try {
+    await billingService.syncBillingFromBooking(booking._id);
+  } catch (err) {
+    console.warn("[bookings] billing sync:", err.message);
+  }
   return toPublicBooking(fresh, { includeIdPhotoData: true });
 }
 
@@ -430,6 +482,11 @@ async function remove(bookingId, actor) {
   }
   assertCanAccess(actor, booking);
   const lean = await findOneBookingWithPopulateOrRaw(booking._id);
+  try {
+    await Billing.deleteMany({ bookingId: booking._id });
+  } catch (err) {
+    console.warn("[bookings] billing cleanup:", err.message);
+  }
   await Booking.deleteOne({ _id: booking._id });
   return toPublicBooking(lean, { includeIdPhotoData: false });
 }

@@ -23,22 +23,47 @@ function trimPhone(value) {
 }
 
 function publicUser(user) {
+  const fn = user.firstName ?? "";
+  const ln = user.lastName ?? "";
+  const combined = [fn, ln].filter(Boolean).join(" ").trim();
+  const name = String(user.name ?? "").trim() || combined;
   return {
     id: user._id,
+    name,
     email: user.email,
-    firstName: user.firstName ?? "",
-    lastName: user.lastName ?? "",
+    firstName: fn,
+    lastName: ln,
     phone: user.phone ?? "",
+    department: user.department ?? "",
+    staffStatus: user.staffStatus ?? "Active",
     role: user.role ?? "guest",
   };
 }
 
+const STAFF_LOGIN_ROLES = new Set(["admin", "cashier", "frontdesk", "housekeeping"]);
+
 async function register(email, password, { firstName, lastName, phone } = {}) {
+  const normalized = normalizeEmail(email);
+  const existing = await User.findOne({ email: normalized }).select("_id").lean();
+  if (existing) {
+    const err = new Error(
+      `An account with "${normalized}" already exists. Sign in instead, or use a different email.`,
+    );
+    err.status = 409;
+    err.code = "EMAIL_EXISTS";
+    throw err;
+  }
+
+  const fn = trimName(firstName);
+  const ln = trimName(lastName);
+  const displayName = [fn, ln].filter(Boolean).join(" ").trim();
   const user = await User.create({
-    email: normalizeEmail(email),
+    email: normalized,
+    username: normalized,
     passwordHash: await User.hashPassword(password),
-    firstName: trimName(firstName),
-    lastName: trimName(lastName),
+    name: displayName,
+    firstName: fn,
+    lastName: ln,
     phone: trimPhone(phone),
     role: "guest",
   });
@@ -62,6 +87,12 @@ async function login(email, password) {
   if (!match) {
     const err = new Error("Invalid email or password");
     err.status = 401;
+    throw err;
+  }
+
+  if (STAFF_LOGIN_ROLES.has(user.role) && String(user.staffStatus || "Active") === "Inactive") {
+    const err = new Error("This staff account is inactive. Contact an administrator.");
+    err.status = 403;
     throw err;
   }
 

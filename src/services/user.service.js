@@ -13,12 +13,19 @@ function trimName(value) {
 
 function toPublicUser(doc) {
   if (!doc) return null;
+  const fn = doc.firstName ?? "";
+  const ln = doc.lastName ?? "";
+  const combined = [fn, ln].filter(Boolean).join(" ").trim();
+  const name = String(doc.name ?? "").trim() || combined;
   return {
     id: doc._id,
+    name,
     email: doc.email,
-    firstName: doc.firstName ?? "",
-    lastName: doc.lastName ?? "",
+    firstName: fn,
+    lastName: ln,
     phone: doc.phone ?? "",
+    department: doc.department ?? "",
+    staffStatus: doc.staffStatus ?? "Active",
     role: doc.role ?? "guest",
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,

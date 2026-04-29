@@ -54,6 +54,8 @@ const roomSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+roomSchema.index({ status: 1, updatedAt: -1 });
+
 const Room = mongoose.model("Room", roomSchema);
 
 Room.ROOM_STATUSES = ROOM_STATUSES;

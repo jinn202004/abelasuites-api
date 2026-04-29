@@ -1,6 +1,10 @@
 const mongoose = require("mongoose");
 
-const NOTIFICATION_TYPES = ["guest_booking_submitted", "housekeeping_cleaning_completed"];
+const NOTIFICATION_TYPES = [
+  "booking_review",
+  "guest_booking_submitted",
+  "housekeeping_cleaning_completed",
+];
 
 const staffNotificationSchema = new mongoose.Schema(
   {

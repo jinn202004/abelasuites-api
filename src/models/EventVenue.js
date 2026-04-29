@@ -79,6 +79,8 @@ const eventVenueSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+eventVenueSchema.index({ status: 1, updatedAt: -1 });
+
 const EventVenue = mongoose.model("EventVenue", eventVenueSchema);
 
 EventVenue.EVENT_VENUE_STATUSES = EVENT_VENUE_STATUSES;

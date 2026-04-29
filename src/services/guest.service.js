@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Guest = require("../models/Guest");
 
 const STAFF_ROLES = new Set(["admin", "cashier", "frontdesk", "housekeeping"]);
@@ -82,7 +83,67 @@ function toPublicGuest(g, { includeIdPhotoData = false } = {}) {
   };
 }
 
+const MAX_PROFILE_PHOTO_CHARS = 600_000;
+
+async function findGuestByUserId(userId) {
+  if (!userId) return null;
+  if (!mongoose.isValidObjectId(userId)) return null;
+  return Guest.findOne({ userId: new mongoose.Types.ObjectId(String(userId)) }).lean();
+}
+
+/**
+ * Update allowed profile fields for the guest row linked to `userId`.
+ * @param {string} userId
+ * @param {object} body
+ * @returns {Promise<import("mongoose").Document | null>}
+ */
+async function updateGuestByUserId(userId, body) {
+  if (!userId || !mongoose.isValidObjectId(userId)) return null;
+  const uid = new mongoose.Types.ObjectId(String(userId));
+  const guest = await Guest.findOne({ userId: uid });
+  if (!guest) return null;
+
+  const b = body && typeof body === "object" ? body : {};
+  if (b.displayName !== undefined) guest.displayName = String(b.displayName).trim();
+  if (b.email !== undefined) guest.email = String(b.email).toLowerCase().trim();
+  if (b.phone !== undefined) guest.phone = String(b.phone).trim();
+  if (b.address !== undefined) guest.address = String(b.address).trim();
+  if (b.profilePhotoData !== undefined) {
+    const s = String(b.profilePhotoData);
+    if (s.length > MAX_PROFILE_PHOTO_CHARS) {
+      throw new Error("Profile photo is too large");
+    }
+    guest.profilePhotoData = s;
+  }
+
+  await guest.save();
+  return guest;
+}
+
+/**
+ * Shape used in billing APIs (aligns with schema fields name / email / contactNumber).
+ */
+function toBillingGuestShape(guestDoc, bookingFallback = {}) {
+  const g = guestDoc && typeof guestDoc === "object" ? guestDoc : {};
+  const name =
+    String(g.displayName || g.name || "").trim() ||
+    String(bookingFallback.customerName || "").trim() ||
+    "";
+  const email =
+    String(g.email || "").trim().toLowerCase() ||
+    String(bookingFallback.email || "").trim().toLowerCase() ||
+    "";
+  const contactNumber =
+    String(g.phone || g.contactNumber || "").trim() ||
+    String(bookingFallback.contactNumber || "").trim() ||
+    "";
+  return { name, email, contactNumber };
+}
+
 module.exports = {
   findOrCreateGuestFromBookingBody,
   toPublicGuest,
+  findGuestByUserId,
+  updateGuestByUserId,
+  toBillingGuestShape,
 };

@@ -1,5 +1,12 @@
 const housekeepingService = require("../services/housekeeping.service");
 
+/** GET /api/housekeeping/recent-cleaning — frontdesk, housekeeping, or admin */
+exports.getRecentCleaning = async (req, res) => {
+  const lim = req.query.limit != null ? Number(req.query.limit) : 10;
+  const recentCleaning = await housekeepingService.getRecentCleaningTasks({ limit: lim });
+  res.json({ recentCleaning });
+};
+
 exports.getTasks = async (req, res) => {
   const includeCompleted =
     req.query.includeCompleted === "1" || String(req.query.includeCompleted).toLowerCase() === "true";

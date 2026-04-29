@@ -19,6 +19,8 @@ const guestSchema = new mongoose.Schema(
     validIdNumber: { type: String, trim: true, default: "" },
     validIdPhotoName: { type: String, default: "" },
     validIdPhotoData: { type: String, default: "" },
+    /** Optional avatar for UI (e.g. data URL or absolute image URL); shown on public testimonials when set */
+    profilePhotoData: { type: String, default: "" },
   },
   { timestamps: true }
 );

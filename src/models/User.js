@@ -3,16 +3,34 @@ const bcrypt = require("bcryptjs");
 
 const SALT_ROUNDS = 10;
 
-const USER_ROLES = ["guest", "cashier", "frontdesk", "admin", "housekeeping"];
+/** Application RBAC: single `users` collection for all accounts. */
+const USER_ROLES = ["admin", "frontdesk", "housekeeping", "guest", "cashier"];
+
+const STAFF_STATUSES = ["Active", "On Leave", "Inactive"];
 
 const userSchema = new mongoose.Schema(
   {
+    /** Display name (full name). Prefer this over firstName/lastName for staff. */
+    name: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     email: {
       type: String,
       required: true,
       unique: true,
       lowercase: true,
       trim: true,
+    },
+    /**
+     * Some databases still have a legacy unique index on `username`. New users must
+     * set this (usually equal to `email`) so inserts do not collide on `username: null`.
+     */
+    username: {
+      type: String,
+      trim: true,
+      lowercase: true,
     },
     firstName: {
       type: String,
@@ -28,6 +46,20 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: "",
+    },
+    /** HR-style fields for staff roles (optional for guests). */
+    department: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    staffStatus: {
+      type: String,
+      enum: {
+        values: STAFF_STATUSES,
+        message: "Invalid staff status",
+      },
+      default: "Active",
     },
     role: {
       type: String,
@@ -57,5 +89,6 @@ userSchema.statics.hashPassword = function hashPassword(password) {
 const User = mongoose.model("User", userSchema);
 
 User.USER_ROLES = USER_ROLES;
+User.STAFF_STATUSES = STAFF_STATUSES;
 
 module.exports = User;

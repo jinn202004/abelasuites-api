@@ -1,97 +1,151 @@
 const mongoose = require("mongoose");
-const Staff = require("../models/Staff");
+const User = require("../models/User");
+const { validatePasswordStrength } = require("../utils/passwordValidation");
 
-function toPublicStaff(doc) {
+/** Non-guest roles stored in the same `users` collection (replaces legacy `staff` collection). */
+const STAFF_USER_ROLES = ["admin", "cashier", "frontdesk", "housekeeping"];
+
+const DISPLAY_BY_ROLE = {
+  admin: "Admin",
+  frontdesk: "Front Desk",
+  housekeeping: "Housekeeping",
+  cashier: "Cashier",
+};
+
+const FORM_ROLE_BY_DISPLAY = {
+  Admin: "admin",
+  "Front Desk": "frontdesk",
+  Housekeeping: "housekeeping",
+  Cashier: "cashier",
+};
+
+function normalizeEmail(email) {
+  return String(email).toLowerCase().trim();
+}
+
+function splitName(full) {
+  const s = String(full || "").trim();
+  if (!s) return { firstName: "", lastName: "" };
+  const parts = s.split(/\s+/);
+  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
+  return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
+}
+
+function toPublicStaffFromUser(doc) {
   if (!doc) return null;
-  const o = typeof doc.toObject === "function" ? doc.toObject() : doc;
+  const role = doc.role;
+  const displayRole = DISPLAY_BY_ROLE[role] || role;
+  const combined = [doc.firstName, doc.lastName].filter(Boolean).join(" ").trim();
+  const name =
+    String(doc.name || "").trim() ||
+    combined ||
+    String(doc.email || "").split("@")[0] ||
+    "User";
   return {
-    id: o._id,
-    name: o.name,
-    email: o.email,
-    role: o.role,
-    department: o.department ?? "",
-    contact: o.contact ?? "",
-    status: o.status ?? "Active",
-    createdAt: o.createdAt,
-    updatedAt: o.updatedAt,
+    id: String(doc._id),
+    name,
+    email: doc.email,
+    role: displayRole,
+    department: doc.department ?? "",
+    contact: doc.phone ?? "",
+    status: doc.staffStatus ?? "Active",
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
   };
 }
 
-function normalizeEmail(email) {
-  return String(email ?? "").toLowerCase().trim();
-}
-
-function assertRole(role) {
-  if (!Staff.STAFF_ROLES.includes(role)) {
-    const err = new Error(`role must be one of: ${Staff.STAFF_ROLES.join(", ")}`);
-    err.status = 400;
-    throw err;
-  }
-}
-
-function assertStatus(status) {
-  if (status === undefined || status === null) return;
-  if (!Staff.STAFF_STATUSES.includes(status)) {
-    const err = new Error(`status must be one of: ${Staff.STAFF_STATUSES.join(", ")}`);
-    err.status = 400;
-    throw err;
-  }
-}
-
 async function list() {
-  const rows = await Staff.find().sort({ createdAt: -1 }).lean();
-  return rows.map((r) => toPublicStaff(r));
+  const rows = await User.find({ role: { $in: STAFF_USER_ROLES } })
+    .sort({ createdAt: -1 })
+    .lean();
+  return rows.map(toPublicStaffFromUser);
 }
 
 async function create(body) {
-  const name = String(body.name ?? "").trim();
-  const email = normalizeEmail(body.email);
-  const role = String(body.role ?? "").trim();
-  const department = String(body.department ?? "").trim();
-  const contact = body.contact !== undefined ? String(body.contact).trim() : "";
-  const status = body.status !== undefined ? String(body.status).trim() : "Active";
+  const {
+    name,
+    email,
+    role: displayRole,
+    department,
+    contact,
+    status,
+    password,
+  } = body || {};
 
-  if (!name) {
+  const dbRole = FORM_ROLE_BY_DISPLAY[displayRole];
+  if (!dbRole) {
+    const err = new Error(`role must be one of: ${Object.keys(FORM_ROLE_BY_DISPLAY).join(", ")}`);
+    err.status = 400;
+    throw err;
+  }
+
+  const pwd = password != null ? String(password) : "";
+  if (!pwd.trim()) {
+    const err = new Error("password is required for new staff user accounts");
+    err.status = 400;
+    throw err;
+  }
+  const pwdErr = validatePasswordStrength(pwd);
+  if (pwdErr) {
+    const err = new Error(pwdErr);
+    err.status = 400;
+    throw err;
+  }
+
+  const nm = String(name || "").trim();
+  if (!nm) {
     const err = new Error("name is required");
     err.status = 400;
     throw err;
   }
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+
+  const normEmail = normalizeEmail(email);
+  if (!normEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail)) {
     const err = new Error("valid email is required");
     err.status = 400;
     throw err;
   }
-  if (!role) {
-    const err = new Error("role is required");
-    err.status = 400;
-    throw err;
-  }
-  assertRole(role);
-  if (!department) {
+
+  const dept = String(department || "").trim();
+  if (!dept) {
     const err = new Error("department is required");
     err.status = 400;
     throw err;
   }
-  assertStatus(status);
 
-  try {
-    const doc = await Staff.create({
-      name,
-      email,
-      role,
-      department,
-      contact,
-      status,
-    });
-    return toPublicStaff(doc);
-  } catch (err) {
-    if (err.code === 11000) {
-      const e = new Error("email already in use");
-      e.status = 409;
-      throw e;
-    }
+  const phone = String(contact || "").trim();
+  if (!phone) {
+    const err = new Error("contact is required");
+    err.status = 400;
     throw err;
   }
+
+  const staffStatus =
+    status && User.STAFF_STATUSES.includes(status) ? status : "Active";
+
+  const existing = await User.findOne({ email: normEmail }).select("_id").lean();
+  if (existing) {
+    const err = new Error("A user with this email already exists");
+    err.status = 409;
+    throw err;
+  }
+
+  const { firstName, lastName } = splitName(nm);
+
+  const doc = await User.create({
+    email: normEmail,
+    username: normEmail,
+    passwordHash: await User.hashPassword(pwd),
+    name: nm,
+    firstName,
+    lastName,
+    phone,
+    department: dept,
+    staffStatus,
+    role: dbRole,
+  });
+
+  return toPublicStaffFromUser(doc.toObject());
 }
 
 async function update(staffId, body) {
@@ -101,57 +155,104 @@ async function update(staffId, body) {
     throw err;
   }
 
-  const staff = await Staff.findById(staffId);
-  if (!staff) {
+  const user = await User.findById(staffId);
+  if (!user) {
     const err = new Error("Staff not found");
     err.status = 404;
     throw err;
   }
 
-  if (body.name !== undefined) staff.name = String(body.name).trim();
-  if (body.email !== undefined) staff.email = normalizeEmail(body.email);
-  if (body.role !== undefined) {
-    const r = String(body.role).trim();
-    assertRole(r);
-    staff.role = r;
+  if (!STAFF_USER_ROLES.includes(user.role)) {
+    const err = new Error("Not a staff user record");
+    err.status = 404;
+    throw err;
   }
-  if (body.department !== undefined) staff.department = String(body.department).trim();
-  if (body.contact !== undefined) staff.contact = String(body.contact).trim();
+
+  if (body.name !== undefined) {
+    const nm = String(body.name).trim();
+    if (!nm) {
+      const err = new Error("name cannot be empty");
+      err.status = 400;
+      throw err;
+    }
+    user.name = nm;
+    const parts = splitName(nm);
+    user.firstName = parts.firstName;
+    user.lastName = parts.lastName;
+  }
+
+  if (body.email !== undefined) {
+    const next = normalizeEmail(body.email);
+    if (!next || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next)) {
+      const err = new Error("valid email is required");
+      err.status = 400;
+      throw err;
+    }
+    const dup = await User.findOne({ email: next, _id: { $ne: user._id } })
+      .select("_id")
+      .lean();
+    if (dup) {
+      const err = new Error("Email already in use");
+      err.status = 409;
+      throw err;
+    }
+    user.email = next;
+    user.username = next;
+  }
+
+  if (body.role !== undefined) {
+    const dbRole = FORM_ROLE_BY_DISPLAY[body.role];
+    if (!dbRole) {
+      const err = new Error("Invalid role");
+      err.status = 400;
+      throw err;
+    }
+    user.role = dbRole;
+  }
+
+  if (body.department !== undefined) {
+    const d = String(body.department).trim();
+    if (!d) {
+      const err = new Error("department cannot be empty");
+      err.status = 400;
+      throw err;
+    }
+    user.department = d;
+  }
+
+  if (body.contact !== undefined) {
+    const c = String(body.contact).trim();
+    if (!c) {
+      const err = new Error("contact cannot be empty");
+      err.status = 400;
+      throw err;
+    }
+    user.phone = c;
+  }
+
   if (body.status !== undefined) {
     const s = String(body.status).trim();
-    assertStatus(s);
-    staff.status = s;
-  }
-
-  if (!staff.name) {
-    const err = new Error("name cannot be empty");
-    err.status = 400;
-    throw err;
-  }
-  if (!staff.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(staff.email)) {
-    const err = new Error("valid email is required");
-    err.status = 400;
-    throw err;
-  }
-  if (!staff.department) {
-    const err = new Error("department cannot be empty");
-    err.status = 400;
-    throw err;
-  }
-
-  try {
-    await staff.save();
-  } catch (err) {
-    if (err.code === 11000) {
-      const e = new Error("email already in use");
-      e.status = 409;
-      throw e;
+    if (!User.STAFF_STATUSES.includes(s)) {
+      const err = new Error(`status must be one of: ${User.STAFF_STATUSES.join(", ")}`);
+      err.status = 400;
+      throw err;
     }
-    throw err;
+    user.staffStatus = s;
   }
 
-  const fresh = await Staff.findById(staff._id).lean();
-  return toPublicStaff(fresh);
+  if (body.password !== undefined && String(body.password).trim()) {
+    const pwdErr = validatePasswordStrength(body.password);
+    if (pwdErr) {
+      const err = new Error(pwdErr);
+      err.status = 400;
+      throw err;
+    }
+    user.passwordHash = await User.hashPassword(body.password);
+  }
+
+  await user.save();
+  const fresh = await User.findById(user._id).lean();
+  return toPublicStaffFromUser(fresh);
 }
 
 async function remove(staffId) {
@@ -160,18 +261,19 @@ async function remove(staffId) {
     err.status = 400;
     throw err;
   }
-  const deleted = await Staff.findByIdAndDelete(staffId);
-  if (!deleted) {
+  const user = await User.findById(staffId);
+  if (!user) {
     const err = new Error("Staff not found");
     err.status = 404;
     throw err;
   }
-  return toPublicStaff(deleted);
+  if (!STAFF_USER_ROLES.includes(user.role)) {
+    const err = new Error("Staff not found");
+    err.status = 404;
+    throw err;
+  }
+  await User.deleteOne({ _id: user._id });
+  return toPublicStaffFromUser(user.toObject());
 }
 
-module.exports = {
-  list,
-  create,
-  update,
-  remove,
-};
+module.exports = { list, create, update, remove };

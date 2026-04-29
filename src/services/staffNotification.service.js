@@ -20,11 +20,11 @@ async function createGuestSubmitted(bookingDoc, body) {
       : `${name} submitted a room reservation — needs your confirmation.`;
 
   await StaffNotification.findOneAndUpdate(
-    { bookingId, type: "guest_booking_submitted" },
+    { bookingId, type: "booking_review" },
     {
       $setOnInsert: {
         bookingId,
-        type: "guest_booking_submitted",
+        type: "booking_review",
         message,
         readByUserIds: [],
       },
@@ -42,6 +42,7 @@ async function listForUser(userId) {
   const notifications = rows.map((r) => ({
     id: String(r._id),
     bookingId: r.bookingId != null ? String(r.bookingId) : "",
+    type: r.type || "",
     message: r.message || "",
     read: userHasRead(r, userId),
     createdAt: r.createdAt,
@@ -53,6 +54,34 @@ async function listForUser(userId) {
 async function markAllRead(userId) {
   const oid = new mongoose.Types.ObjectId(String(userId));
   await StaffNotification.updateMany({}, { $addToSet: { readByUserIds: oid } });
+}
+
+async function markRead(userId, notificationId) {
+  if (!mongoose.isValidObjectId(notificationId)) {
+    const err = new Error("Invalid notification id");
+    err.status = 400;
+    throw err;
+  }
+  const uid = new mongoose.Types.ObjectId(String(userId));
+  const nid = new mongoose.Types.ObjectId(String(notificationId));
+  const updated = await StaffNotification.findByIdAndUpdate(
+    nid,
+    { $addToSet: { readByUserIds: uid } },
+    { new: true }
+  ).lean();
+  if (!updated) {
+    const err = new Error("Notification not found");
+    err.status = 404;
+    throw err;
+  }
+  return {
+    id: String(updated._id),
+    bookingId: updated.bookingId != null ? String(updated.bookingId) : "",
+    type: updated.type || "",
+    message: updated.message || "",
+    read: userHasRead(updated, userId),
+    createdAt: updated.createdAt,
+  };
 }
 
 /**
@@ -81,5 +110,6 @@ module.exports = {
   createGuestSubmitted,
   createHousekeepingCleaningCompleted,
   listForUser,
+  markRead,
   markAllRead,
 };

@@ -2,9 +2,17 @@ const authService = require("../services/auth.service");
 const { validatePasswordStrength } = require("../utils/passwordValidation");
 
 function duplicateKeyMessage(err) {
-  const key = err.keyPattern ? Object.keys(err.keyPattern)[0] : null;
-  if (key === "email") return "Email already registered";
-  return "Email already registered";
+  const kv = err.keyValue && typeof err.keyValue === "object" ? err.keyValue : {};
+  if (kv.email != null && String(kv.email).trim() !== "") {
+    return `An account with "${String(kv.email).trim()}" already exists. Sign in instead, or use a different email.`;
+  }
+  const parts = Object.entries(kv)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(", ");
+  if (parts) {
+    return `Registration conflict (${parts}). Try signing in, or change the highlighted value.`;
+  }
+  return "Registration could not be completed because of a duplicate value. Try signing in, or use different details.";
 }
 
 exports.register = async (req, res) => {
@@ -26,6 +34,9 @@ exports.register = async (req, res) => {
     });
     res.status(201).json({ user });
   } catch (err) {
+    if (err.status === 409 && err.message) {
+      return res.status(409).json({ error: err.message });
+    }
     if (err.code === 11000) {
       return res.status(409).json({ error: duplicateKeyMessage(err) });
     }
