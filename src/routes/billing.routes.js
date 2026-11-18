@@ -1,7 +1,7 @@
 const { Router } = require("express");
 const billingController = require("../controllers/billing.controller");
 const { authenticate } = require("../middleware/auth");
-const { requireBillingStaff, requireCashierOrAdmin, requireGuestRole } = require("../middleware/roleMiddleware");
+const { requireBillingStaff, requireGuestRole } = require("../middleware/roleMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 
 const router = Router();
@@ -18,7 +18,7 @@ router.get("/", authenticate, requireBillingStaff, asyncHandler(billingControlle
 router.put(
   "/:id/payment",
   authenticate,
-  requireCashierOrAdmin,
+  requireBillingStaff,
   asyncHandler(billingController.updatePayment),
 );
 

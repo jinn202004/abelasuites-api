@@ -6,6 +6,11 @@ exports.list = async (req, res) => {
   res.json({ bookings });
 };
 
+exports.eventCalendar = async (_req, res) => {
+  const bookings = await bookingService.listEventCalendarBookings();
+  res.json({ bookings });
+};
+
 exports.getById = async (req, res) => {
   const { id } = req.params;
   if (!mongoose.isValidObjectId(id)) {

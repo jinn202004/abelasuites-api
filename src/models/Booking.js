@@ -70,6 +70,9 @@ const bookingSchema = new mongoose.Schema(
     eventEndDate: { type: String, trim: true, default: "" },
     expectedPax: { type: Number, min: 1, default: 1 },
     timeSlot: { type: String, trim: true, default: "" },
+    /** Wall-clock HH:MM for same-day event overlap checks (guest + front desk calendars). */
+    startTime: { type: String, trim: true, default: "" },
+    endTime: { type: String, trim: true, default: "" },
     paymentAmount: { type: String, trim: true, default: "" },
     paymentMethod: { type: String, trim: true, default: "" },
     transactionId: { type: String, trim: true, default: "" },

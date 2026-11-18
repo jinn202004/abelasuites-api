@@ -1,11 +1,21 @@
 const mongoose = require("mongoose");
 const Guest = require("../models/Guest");
+const User = require("../models/User");
 
 const STAFF_ROLES = new Set(["admin", "cashier", "frontdesk", "housekeeping"]);
+
+function accountDisplayNameFromUser(user) {
+  if (!user) return "";
+  const combined = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+  return combined || String(user.name || "").trim();
+}
 
 /**
  * Upsert guest profile from booking form data (logged-in user context).
  * Maps legacy body fields: guestId (ID number string), guestIdPhoto* → validId*.
+ *
+ * Logged-in guests: booking `customerName` / contact fields update the reservation only —
+ * they must not overwrite the guest profile (Settings → My Profile).
  */
 async function findOrCreateGuestFromBookingBody(actor, body) {
   const email = String(body.email || "").toLowerCase().trim();
@@ -33,6 +43,7 @@ async function findOrCreateGuestFromBookingBody(actor, body) {
         : "";
 
   const staff = STAFF_ROLES.has(actor.role);
+  const isAccountGuest = !staff && actor.id;
 
   let guest = null;
   if (!staff) {
@@ -43,23 +54,42 @@ async function findOrCreateGuestFromBookingBody(actor, body) {
   }
 
   if (guest) {
-    guest.displayName = displayName || guest.displayName;
-    guest.email = email || guest.email;
-    guest.phone = phone;
-    guest.address = address;
+    if (!guest.userId && isAccountGuest) guest.userId = actor.id;
     if (validIdNumber) guest.validIdNumber = validIdNumber;
     if (validIdPhotoName) guest.validIdPhotoName = validIdPhotoName;
     if (validIdPhotoData) guest.validIdPhotoData = validIdPhotoData;
-    if (!guest.userId && !staff && actor.id) guest.userId = actor.id;
+
+    /** Walk-in / staff bookings may refresh the linked guest row from the form. */
+    if (!isAccountGuest) {
+      guest.displayName = displayName || guest.displayName;
+      guest.email = email || guest.email;
+      guest.phone = phone;
+      guest.address = address;
+    }
+
     await guest.save();
     return guest;
   }
 
+  let createDisplayName = displayName;
+  let createPhone = phone;
+  let createEmail = email;
+  let userDoc = null;
+  if (isAccountGuest) {
+    userDoc = await User.findById(actor.id).select("name firstName lastName phone email").lean();
+    const fromUser = accountDisplayNameFromUser(userDoc);
+    if (fromUser) createDisplayName = fromUser;
+    const userPhone = String(userDoc?.phone || "").trim();
+    if (userPhone) createPhone = userPhone;
+    const userEmail = String(userDoc?.email || "").trim().toLowerCase();
+    if (userEmail) createEmail = userEmail;
+  }
+
   return Guest.create({
-    userId: staff ? null : actor.id,
-    displayName,
-    email,
-    phone,
+    userId: isAccountGuest ? actor.id : null,
+    displayName: createDisplayName,
+    email: createEmail,
+    phone: createPhone,
     address,
     validIdNumber,
     validIdPhotoName,

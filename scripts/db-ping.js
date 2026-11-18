@@ -5,7 +5,9 @@
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
+const dns = require("dns");
 const mongoose = require("mongoose");
+const { MONGOOSE_CONNECT_OPTIONS } = require("../src/config/mongooseOptions");
 
 const uri = process.env.MONGODB_URI;
 if (!uri || !String(uri).trim()) {
@@ -13,8 +15,12 @@ if (!uri || !String(uri).trim()) {
   process.exit(1);
 }
 
+if (uri.startsWith("mongodb+srv://")) {
+  dns.setServers(["8.8.8.8", "1.1.1.1"]);
+}
+
 mongoose
-  .connect(uri, { serverSelectionTimeoutMS: 15_000 })
+  .connect(uri, MONGOOSE_CONNECT_OPTIONS)
   .then(() => {
     console.log("OK — connected to database:", mongoose.connection.name);
     console.log("   host:", mongoose.connection.host || "(srv)");

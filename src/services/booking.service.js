@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { withMongoRetry } = require("../utils/mongoRetry");
 const Booking = require("../models/Booking");
 const Billing = require("../models/Billing");
 const Guest = require("../models/Guest");
@@ -75,12 +76,16 @@ async function hydrateRawBookings(docs) {
 
 async function findBookingsWithPopulateOrRaw(filter, sort) {
   try {
-    return await Booking.find(filter).populate(DEFAULT_POPULATE).sort(sort).lean();
+    return await withMongoRetry(() =>
+      Booking.find(filter).populate(DEFAULT_POPULATE).sort(sort).lean()
+    );
   } catch (err) {
     console.warn("[bookings] Mongoose find/populate failed, using raw collection:", err.message);
-    const coll = mongoose.connection.collection("bookings");
-    const raw = await coll.find(filter).sort(sort).toArray();
-    return hydrateRawBookings(raw);
+    return withMongoRetry(async () => {
+      const coll = mongoose.connection.collection("bookings");
+      const raw = await coll.find(filter).sort(sort).toArray();
+      return hydrateRawBookings(raw);
+    });
   }
 }
 
@@ -88,19 +93,23 @@ async function findOneBookingWithPopulateOrRaw(bookingId) {
   if (!mongoose.isValidObjectId(bookingId)) return null;
   let doc = null;
   try {
-    doc = await Booking.findById(bookingId).populate(DEFAULT_POPULATE).lean();
+    doc = await withMongoRetry(() =>
+      Booking.findById(bookingId).populate(DEFAULT_POPULATE).lean()
+    );
   } catch (err) {
     console.warn("[bookings] findById failed, using raw collection:", err.message);
   }
   if (doc) return doc;
 
   /** Some legacy rows load via native collection only; approve + housekeeping need this row. */
-  const coll = mongoose.connection.collection("bookings");
-  const _id = new mongoose.Types.ObjectId(String(bookingId));
-  const raw = await coll.findOne({ _id });
-  if (!raw) return null;
-  const [h] = await hydrateRawBookings([raw]);
-  return h;
+  return withMongoRetry(async () => {
+    const coll = mongoose.connection.collection("bookings");
+    const _id = new mongoose.Types.ObjectId(String(bookingId));
+    const raw = await coll.findOne({ _id });
+    if (!raw) return null;
+    const [h] = await hydrateRawBookings([raw]);
+    return h;
+  });
 }
 
 /** Ensures JSON clients always get a string id (avoids duplicate React keys / wrong row lookups). */
@@ -225,6 +234,8 @@ function toPublicBooking(doc, options = {}) {
     eventEndDate: o.eventEndDate ?? "",
     expectedPax: o.expectedPax ?? 1,
     timeSlot: o.timeSlot ?? "",
+    startTime: o.startTime ?? "",
+    endTime: o.endTime ?? "",
     paymentAmount: paymentAmountStr,
     paymentMethod: o.paymentMethod ?? "",
     transactionId: o.transactionId ?? "",
@@ -358,6 +369,8 @@ async function create(body, actor) {
       return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
     })(),
     timeSlot: body.timeSlot !== undefined ? String(body.timeSlot).trim() : "",
+    startTime: body.startTime !== undefined ? String(body.startTime).trim() : "",
+    endTime: body.endTime !== undefined ? String(body.endTime).trim() : "",
     paymentAmount: body.paymentAmount !== undefined ? String(body.paymentAmount).trim() : "",
     paymentMethod: body.paymentMethod !== undefined ? String(body.paymentMethod).trim() : "",
     transactionId: body.transactionId !== undefined ? String(body.transactionId).trim() : "",
@@ -418,6 +431,8 @@ async function update(bookingId, body, actor) {
     "eventDate",
     "eventEndDate",
     "timeSlot",
+    "startTime",
+    "endTime",
     "paymentAmount",
     "paymentMethod",
     "transactionId",
@@ -491,12 +506,47 @@ async function remove(bookingId, actor) {
   return toPublicBooking(lean, { includeIdPhotoData: false });
 }
 
+const EVENT_CALENDAR_EXCLUDED_STATUSES = [
+  "cancelled",
+  "declined",
+  "rejected",
+  "completed",
+  "checked-out",
+];
+
+/** Public event occupancy rows for guest/frontdesk venue date pickers. */
+async function listEventCalendarBookings() {
+  const rows = await findBookingsWithPopulateOrRaw(
+    {
+      type: "event",
+      status: { $nin: EVENT_CALENDAR_EXCLUDED_STATUSES },
+    },
+    { eventDate: 1, createdAt: -1 }
+  );
+  return rows.map((r) => {
+    const pub = toPublicBooking(r, { includeIdPhotoData: false });
+    return {
+      id: pub.id,
+      eventVenueId: pub.eventVenueId,
+      eventDate: pub.eventDate,
+      eventEndDate: pub.eventEndDate,
+      startTime: pub.startTime,
+      endTime: pub.endTime,
+      timeSlot: pub.timeSlot,
+      status: pub.status,
+      eventTitle: pub.eventTitle,
+      venueName: pub.venueName,
+    };
+  });
+}
+
 module.exports = {
   toPublicBooking,
   findBookingsWithPopulateOrRaw,
   findOneBookingWithPopulateOrRaw,
   hydrateRawBookings,
   list,
+  listEventCalendarBookings,
   getById,
   create,
   update,

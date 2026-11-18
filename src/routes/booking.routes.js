@@ -8,6 +8,7 @@ const router = Router();
 
 router.use(bookingApprovalRoutes);
 
+router.get("/event-calendar", asyncHandler(bookingController.eventCalendar));
 router.get("/", authenticate, asyncHandler(bookingController.list));
 router.get("/:id", authenticate, asyncHandler(bookingController.getById));
 router.post("/", authenticate, asyncHandler(bookingController.create));

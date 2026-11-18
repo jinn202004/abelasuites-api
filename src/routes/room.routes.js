@@ -3,6 +3,7 @@ const roomController = require("../controllers/room.controller");
 const { authenticate } = require("../middleware/auth");
 const { requireAdmin } = require("../middleware/requireAdmin");
 const { requireFrontdeskOrAdmin } = require("../middleware/roleMiddleware");
+const { imageUpload } = require("../middleware/imageUpload");
 const asyncHandler = require("../utils/asyncHandler");
 
 const router = Router();
@@ -20,6 +21,7 @@ router.patch(
 
 router.use(authenticate, requireAdmin);
 
+router.post("/upload", imageUpload.single("image"), asyncHandler(roomController.uploadImage));
 router.post("/", asyncHandler(roomController.create));
 router.patch("/:id", asyncHandler(roomController.update));
 router.delete("/:id", asyncHandler(roomController.remove));

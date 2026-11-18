@@ -76,7 +76,8 @@ async function create(body) {
     features,
   } = body;
 
-  if (!title || !String(title).trim()) {
+  const resolvedTitle = String(title ?? pkg ?? "").trim();
+  if (!resolvedTitle) {
     const err = new Error("title is required");
     err.status = 400;
     throw err;
@@ -101,9 +102,9 @@ async function create(body) {
   }
 
   const room = await Room.create({
-    title: String(title).trim(),
+    title: resolvedTitle,
     roomNumber: String(roomNumber).trim(),
-    package: pkg !== undefined ? String(pkg).trim() : "",
+    package: pkg !== undefined ? String(pkg).trim() : resolvedTitle,
     image: image !== undefined ? String(image) : "",
     price: p,
     guests: g,

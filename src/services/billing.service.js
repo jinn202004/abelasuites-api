@@ -7,8 +7,8 @@ const { toBillingGuestShape, findGuestByUserId } = require("./guest.service");
 /** May list billing ledgers and open guest billing detail (read). */
 const BILLING_READER_ROLES = new Set(["admin", "frontdesk", "cashier"]);
 
-/** May apply `PUT /api/billing/:id/payment` (admin override + cashier). */
-const BILLING_PAYMENT_ROLES = new Set(["admin", "cashier"]);
+/** May apply `PUT /api/billing/:id/payment` (front desk, cashier, admin). */
+const BILLING_PAYMENT_ROLES = new Set(["admin", "cashier", "frontdesk"]);
 
 function parseMoneyAmount(v) {
   if (v == null || v === "") return NaN;

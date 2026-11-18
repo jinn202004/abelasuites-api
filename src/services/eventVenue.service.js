@@ -51,21 +51,51 @@ function pickFeaturesFromBody(body) {
 }
 
 /**
+ * Map admin UI / legacy field names and fill sensible defaults before validation.
+ */
+function normalizeCreateBody(body) {
+  const b = { ...(body || {}) };
+  if (!String(b.name || "").trim() && String(b.venueName || "").trim()) {
+    b.name = String(b.venueName).trim();
+  }
+  if (!String(b.image || "").trim() && String(b.imageUrl || "").trim()) {
+    b.image = String(b.imageUrl).trim();
+  }
+  const name = String(b.name || "").trim();
+  const pkg = String(b.package || "").trim();
+  if (!name && pkg) b.name = pkg;
+  if (!pkg && name) b.package = name;
+  if (!String(b.limit || "").trim() && b.capacity != null && b.capacity !== "") {
+    b.limit = `${b.capacity} guests`;
+  }
+  if (!String(b.location || "").trim()) b.location = "On premises";
+  if (!String(b.description || "").trim()) {
+    b.description = String(b.name || b.package || "").trim();
+  }
+  if (!String(b.image || "").trim()) b.image = "";
+  return b;
+}
+
+async function nextEventNum() {
+  const latest = await EventVenue.findOne().sort({ eventNum: -1 }).select("eventNum").lean();
+  if (!latest?.eventNum) return "EV001";
+  const m = String(latest.eventNum).match(/(\d+)$/);
+  const n = m ? parseInt(m[1], 10) + 1 : 1;
+  return `EV${String(n).padStart(3, "0")}`;
+}
+
+/**
  * Ensures new venues match the full shape used in `db.json` + admin UI so DB rows are easy to spot.
  */
 function assertCompleteCatalogPayload(body, { isCreate }) {
   if (!isCreate) return;
   const missing = [];
-  if (!String(body.eventNum || "").trim()) missing.push("eventNum");
   if (!String(body.name || "").trim()) missing.push("name");
   if (!String(body.package || "").trim()) missing.push("package");
   if (!String(body.limit || "").trim()) missing.push("limit");
   if (body.price === undefined || body.price === null || body.price === "") {
     missing.push("price");
   }
-  if (!String(body.location || "").trim()) missing.push("location");
-  if (!String(body.description || "").trim()) missing.push("description");
-  if (!String(body.image || "").trim()) missing.push("image");
 
   const feats = pickFeaturesFromBody(body);
   if (!feats || feats.length === 0) {
@@ -76,7 +106,7 @@ function assertCompleteCatalogPayload(body, { isCreate }) {
     const err = new Error(
       `Incomplete event venue. Missing: ${missing.join(
         ", ",
-      )}. Expected the same fields as your catalog: eventNum, name, package, type, limit, price, location, description, features (or amenities), housekeeping, image.`,
+      )}. Expected name, package, limit, price, and at least one feature.`,
     );
     err.status = 400;
     err.missing = missing;
@@ -114,6 +144,11 @@ async function list() {
   return rows.map((r) => toPublicEventVenue(r));
 }
 
+/** Public guest catalog — same rows as staff list, sorted for browse/booking UIs. */
+async function listCatalog() {
+  return list();
+}
+
 async function getById(id) {
   if (!mongoose.isValidObjectId(id)) return null;
   const doc = await EventVenue.findById(id).lean();
@@ -121,7 +156,11 @@ async function getById(id) {
 }
 
 async function create(body) {
-  assertCompleteCatalogPayload(body, { isCreate: true });
+  const normalized = normalizeCreateBody(body);
+  if (!String(normalized.eventNum || "").trim()) {
+    normalized.eventNum = await nextEventNum();
+  }
+  assertCompleteCatalogPayload(normalized, { isCreate: true });
 
   const {
     eventNum,
@@ -134,11 +173,11 @@ async function create(body) {
     description,
     image,
     housekeeping,
-  } = body;
+  } = normalized;
 
-  const price = parsePrice(body.price);
+  const price = parsePrice(normalized.price);
   const cap = parseCapacity(capacity);
-  const features = pickFeaturesFromBody(body);
+  const features = pickFeaturesFromBody(normalized);
   const hk = housekeeping !== undefined ? normalizeStringArray(housekeeping, "housekeeping") : [];
 
   const doc = await EventVenue.create({
@@ -171,37 +210,28 @@ async function update(id, body) {
     throw err;
   }
 
-  const {
-    eventNum,
-    name,
-    package: pkg,
-    type,
-    limit,
-    capacity,
-    location,
-    description,
-    image,
-    housekeeping,
-  } = body;
-
-  if (eventNum !== undefined) venue.eventNum = String(eventNum).trim();
-  if (name !== undefined) venue.name = String(name).trim();
-  if (pkg !== undefined) venue.package = String(pkg).trim();
-  if (type !== undefined) venue.type = String(type).trim();
-  if (limit !== undefined) venue.limit = String(limit).trim();
-  if (capacity !== undefined) {
-    venue.capacity = parseCapacity(capacity);
+  if (body.eventNum !== undefined) venue.eventNum = String(body.eventNum).trim();
+  if (body.name !== undefined || body.venueName !== undefined) {
+    venue.name = String(body.name ?? body.venueName ?? "").trim();
+  }
+  if (body.package !== undefined) venue.package = String(body.package).trim();
+  if (body.type !== undefined) venue.type = String(body.type).trim();
+  if (body.limit !== undefined) venue.limit = String(body.limit).trim();
+  if (body.capacity !== undefined) {
+    venue.capacity = parseCapacity(body.capacity);
   }
   if (body.price !== undefined) venue.price = parsePrice(body.price);
-  if (location !== undefined) venue.location = String(location).trim();
-  if (description !== undefined) venue.description = String(description).trim();
-  if (image !== undefined) venue.image = String(image);
+  if (body.location !== undefined) venue.location = String(body.location).trim();
+  if (body.description !== undefined) venue.description = String(body.description).trim();
+  if (body.image !== undefined || body.imageUrl !== undefined) {
+    venue.image = String(body.image ?? body.imageUrl ?? "");
+  }
 
   if (body.features !== undefined || body.amenities !== undefined) {
     venue.features = pickFeaturesFromBody(body);
   }
-  if (housekeeping !== undefined) {
-    venue.housekeeping = normalizeStringArray(housekeeping, "housekeeping");
+  if (body.housekeeping !== undefined) {
+    venue.housekeeping = normalizeStringArray(body.housekeeping, "housekeeping");
   }
   if (body.status !== undefined) {
     const st = String(body.status).trim();
@@ -244,6 +274,7 @@ async function remove(id) {
 
 module.exports = {
   list,
+  listCatalog,
   getById,
   create,
   update,

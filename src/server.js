@@ -1,6 +1,7 @@
-const { createApp } = require("./app");
+// Load config first so Atlas SRV DNS overrides apply before mongoose models load.
 const { PORT, AUTO_APPROVE_REVIEWS, TESTIMONIALS_REQUIRE_APPROVAL } = require("./config");
 const { connectDatabase } = require("./config/database");
+const { createApp } = require("./app");
 
 async function start() {
   await connectDatabase();

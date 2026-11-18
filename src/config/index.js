@@ -1,11 +1,19 @@
 const path = require("path");
+const dns = require("dns");
 
 require("dotenv").config({
   path: path.join(__dirname, "..", "..", ".env"),
 });
 
-const PORT = Number(process.env.PORT) || 5000;
 const MONGODB_URI = process.env.MONGODB_URI || "";
+
+// Windows/local DNS often fails Atlas SRV lookups (querySrv ECONNREFUSED).
+// Set public resolvers before any mongoose/driver code runs.
+if (MONGODB_URI.startsWith("mongodb+srv://")) {
+  dns.setServers(["8.8.8.8", "1.1.1.1"]);
+}
+
+const PORT = Number(process.env.PORT) || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "";
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
 

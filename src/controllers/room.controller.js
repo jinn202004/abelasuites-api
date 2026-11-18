@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const roomService = require("../services/room.service");
+const { uploadRoomImage } = require("../services/s3Upload.service");
 
 /** Front desk housekeeping UI: Needs clean, Available (stored as ready). */
 const FRONTDESK_HK_STATUSES = ["needs_cleaning", "ready"];
@@ -75,6 +76,25 @@ exports.update = async (req, res) => {
       err.status === 409
     ) {
       return res.status(err.status).json({ error: err.message });
+    }
+    throw err;
+  }
+};
+
+exports.uploadImage = async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: "No image file provided. Use form field 'image'." });
+    }
+    const result = await uploadRoomImage(file);
+    res.json(result);
+  } catch (err) {
+    if (err.status === 400 || err.status === 503) {
+      return res.status(err.status).json({
+        error: err.message,
+        code: err.code,
+      });
     }
     throw err;
   }
